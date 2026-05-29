@@ -926,6 +926,10 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
                       fg_color=BG2, hover_color=BORDER, text_color=TEXT2,
                       font=("Segoe UI", 11),
                       command=self._limpiar).pack(side="right", padx=4, pady=7)
+        ctk.CTkButton(tb, text="↑  Exportar Excel", width=145, height=30,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 11),
+                      command=self._exportar_excel).pack(side="right", padx=2, pady=7)
         ctk.CTkButton(tb, text="↓  Importar CSV", width=130, height=30,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 11),
@@ -1465,6 +1469,211 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
             text=f"{len(all_rows)} usuarios  |  {ts_str}",
             text_color=TEXT2)
 
+    def _exportar_excel(self):
+        from tkinter.filedialog import askdirectory
+        import io
+
+        if not self._datos:
+            messagebox.showinfo("Sin datos", "No hay datos de contabilidad cargados.")
+            return
+
+        # Elegir impresoras a exportar
+        ips_disp = list(self._datos.keys())
+        nombres  = [self._datos[ip].get("nombre_impresora", ip) for ip in ips_disp]
+        dlg = _DialogSeleccionarImpresoras(self, list(zip(ips_disp, nombres)))
+        self.wait_window(dlg)
+        if not dlg.resultado:
+            return
+        ips_sel = dlg.resultado  # lista de IPs
+
+        carpeta = askdirectory(title="Selecciona carpeta de destino")
+        if not carpeta:
+            return
+
+        # Intentar openpyxl; si no, generar CSV
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+            usa_xlsx = True
+        except ImportError:
+            usa_xlsx = False
+
+        vista     = self._sel_vista
+        mes_label = self._sel_mes
+
+        generados = []
+        errores   = []
+
+        CABECERAS = ["Usuario", "ID", "Imp. B/N", "Imp. Color", "Cop. B/N", "Cop. Color", "Total"]
+
+        for ip in ips_sel:
+            bloque = self._datos.get(ip, {})
+            nombre_imp = bloque.get("nombre_impresora", ip)
+            snapshots  = bloque.get("snapshots", {})
+            sorted_keys = sorted(snapshots.keys())
+
+            # Determinar snapshot actual
+            if mes_label == "Acumulado" or vista == "Acumulado":
+                cur_key  = sorted_keys[-1] if sorted_keys else None
+                prev_key = None
+            else:
+                mes_key_sel = self._mes_key_from_label(mes_label)
+                cur_key  = mes_key_sel if mes_key_sel in snapshots else (sorted_keys[-1] if sorted_keys else None)
+                idx = sorted_keys.index(cur_key) if cur_key in sorted_keys else -1
+                prev_key = sorted_keys[idx - 1] if idx > 0 else None
+
+            if cur_key is None:
+                errores.append(f"{nombre_imp}: sin snapshots")
+                continue
+
+            cur_usuarios  = {u["usuario"]: u for u in snapshots[cur_key].get("usuarios", [])}
+            prev_usuarios = {}
+            if prev_key:
+                prev_usuarios = {u["usuario"]: u for u in snapshots[prev_key].get("usuarios", [])}
+
+            filas_depto = []
+            filas_user  = []
+
+            def _nombre_base(label):
+                return label.split(" (")[0].lower().rstrip()
+
+            for uname, u in cur_usuarios.items():
+                uid = u.get("id", "")
+                if prev_key and uname in prev_usuarios:
+                    pu = prev_usuarios[uname]
+                    ib = max(0, u["imp_bw"]    - pu["imp_bw"])
+                    ic = max(0, u["imp_color"] - pu["imp_color"])
+                    cb = max(0, u["cop_bw"]    - pu["cop_bw"])
+                    cc = max(0, u["cop_color"] - pu["cop_color"])
+                else:
+                    ib, ic, cb, cc = u["imp_bw"], u["imp_color"], u["cop_bw"], u["cop_color"]
+                total = ib + ic + cb + cc
+                fila  = [uname, uid, ib, ic, cb, cc, total]
+                if _nombre_base(uname) in self._DEPARTAMENTOS:
+                    filas_depto.append(fila)
+                else:
+                    filas_user.append(fila)
+
+            filas_depto.sort(key=lambda r: r[6], reverse=True)
+            filas_user.sort(key=lambda r: r[6], reverse=True)
+
+            # Nombre de archivo seguro
+            nombre_safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in nombre_imp)[:50]
+            mes_safe    = mes_label.replace(" ", "_")
+
+            try:
+                if usa_xlsx:
+                    wb = openpyxl.Workbook()
+                    ws = wb.active
+                    ws.title = mes_safe[:31]
+
+                    # Título
+                    ws.append([f"{nombre_imp}  —  {mes_label}  ({vista})"])
+                    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(CABECERAS))
+                    title_cell = ws.cell(1, 1)
+                    title_cell.font      = Font(bold=True, size=13, color="E8EAF0")
+                    title_cell.fill      = PatternFill("solid", fgColor="232640")
+                    title_cell.alignment = Alignment(horizontal="center")
+                    ws.append([])
+
+                    def _cabecera_seccion(titulo):
+                        ws.append([titulo])
+                        ws.merge_cells(start_row=ws.max_row, start_column=1,
+                                       end_row=ws.max_row, end_column=len(CABECERAS))
+                        c = ws.cell(ws.max_row, 1)
+                        c.font = Font(bold=True, color="7AB4F5")
+                        c.fill = PatternFill("solid", fgColor="1C2A3A")
+
+                    def _fila_cabecera():
+                        ws.append(CABECERAS)
+                        for col in range(1, len(CABECERAS)+1):
+                            c = ws.cell(ws.max_row, col)
+                            c.font = Font(bold=True, color="E8EAF0")
+                            c.fill = PatternFill("solid", fgColor="2C3057")
+                            c.alignment = Alignment(horizontal="center")
+
+                    def _insertar_filas(filas, alt_start=False):
+                        alt = alt_start
+                        for f in filas:
+                            ws.append(f)
+                            fill_color = "1E2238" if alt else "232640"
+                            for col in range(1, len(CABECERAS)+1):
+                                c = ws.cell(ws.max_row, col)
+                                c.fill = PatternFill("solid", fgColor=fill_color)
+                                if col > 2:
+                                    c.alignment = Alignment(horizontal="center")
+                            alt = not alt
+
+                    if filas_depto:
+                        _cabecera_seccion(f"DEPARTAMENTOS ({len(filas_depto)})")
+                        _fila_cabecera()
+                        _insertar_filas(filas_depto)
+                        ws.append([])
+
+                    if filas_user:
+                        _cabecera_seccion(f"USUARIOS ({len(filas_user)})")
+                        _fila_cabecera()
+                        _insertar_filas(filas_user)
+                        ws.append([])
+
+                    # Fila TOTAL
+                    todas = filas_depto + filas_user
+                    ws.append(["TOTAL", "",
+                               sum(r[2] for r in todas), sum(r[3] for r in todas),
+                               sum(r[4] for r in todas), sum(r[5] for r in todas),
+                               sum(r[6] for r in todas)])
+                    for col in range(1, len(CABECERAS)+1):
+                        c = ws.cell(ws.max_row, col)
+                        c.font = Font(bold=True, color="4F8EF7")
+                        c.fill = PatternFill("solid", fgColor="2C3057")
+                        if col > 2:
+                            c.alignment = Alignment(horizontal="center")
+
+                    # Anchos de columna
+                    ws.column_dimensions["A"].width = 28
+                    ws.column_dimensions["B"].width = 12
+                    for letra in ("C","D","E","F","G"):
+                        ws.column_dimensions[letra].width = 13
+
+                    ruta = os.path.join(carpeta, f"{nombre_safe}_{mes_safe}.xlsx")
+                    wb.save(ruta)
+                else:
+                    # Fallback CSV
+                    ruta = os.path.join(carpeta, f"{nombre_safe}_{mes_safe}.csv")
+                    with open(ruta, "w", encoding="utf-8-sig", newline="") as f:
+                        import csv as _csv
+                        w = _csv.writer(f)
+                        w.writerow([f"{nombre_imp} — {mes_label} ({vista})"])
+                        w.writerow([])
+                        if filas_depto:
+                            w.writerow([f"DEPARTAMENTOS ({len(filas_depto)})"])
+                            w.writerow(CABECERAS)
+                            w.writerows(filas_depto)
+                            w.writerow([])
+                        if filas_user:
+                            w.writerow([f"USUARIOS ({len(filas_user)})"])
+                            w.writerow(CABECERAS)
+                            w.writerows(filas_user)
+                            w.writerow([])
+                        todas = filas_depto + filas_user
+                        w.writerow(["TOTAL","",
+                                    sum(r[2] for r in todas), sum(r[3] for r in todas),
+                                    sum(r[4] for r in todas), sum(r[5] for r in todas),
+                                    sum(r[6] for r in todas)])
+
+                generados.append(os.path.basename(ruta))
+            except Exception as e:
+                errores.append(f"{nombre_imp}: {e}")
+
+        if generados:
+            ext = "Excel" if usa_xlsx else "CSV"
+            msg = f"✔  {len(generados)} archivo(s) {ext} generados en:\n{carpeta}\n\n" + "\n".join(generados)
+            if errores:
+                msg += "\n\nErrores:\n" + "\n".join(errores)
+            messagebox.showinfo("Exportación completada", msg)
+        elif errores:
+            messagebox.showerror("Error al exportar", "\n".join(errores))
+
     def _limpiar(self):
         if messagebox.askyesno("Limpiar", "¿Eliminar todos los datos de contabilidad cargados?"):
             self._datos = {}
@@ -1552,6 +1761,48 @@ class _DialogCredencialesXSA(ctk.CTkToplevel):
             for ip, (var, imp) in self._checks.items()
             if var.get()
         ]
+        self.destroy()
+
+
+class _DialogSeleccionarImpresoras(ctk.CTkToplevel):
+    """Checkboxes para elegir qué impresoras exportar."""
+    def __init__(self, parent, opciones):  # opciones: [(ip, nombre), ...]
+        super().__init__(parent)
+        self.resultado = None
+        self.title("Exportar — selecciona impresoras")
+        self.geometry("420x300")
+        self.configure(fg_color=BG2)
+        self.grab_set(); self.lift(); self.focus_force()
+
+        ctk.CTkLabel(self, text="Selecciona las impresoras a exportar:",
+                     font=("Segoe UI", 12), text_color=TEXT).pack(pady=(16, 8))
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=16)
+
+        self._checks = {}
+        for ip, nombre in opciones:
+            var = tk.BooleanVar(value=True)
+            self._checks[ip] = var
+            ctk.CTkCheckBox(scroll, text=nombre, variable=var,
+                            text_color=TEXT, font=("Segoe UI", 11),
+                            fg_color=ACCENT).pack(anchor="w", pady=3)
+
+        btns = ctk.CTkFrame(self, fg_color=BG2, height=52)
+        btns.pack(side="bottom", fill="x", padx=16, pady=10)
+        btns.pack_propagate(False)
+        ctk.CTkButton(btns, text="Cancelar", width=100, height=34,
+                      fg_color=BG3, text_color=TEXT,
+                      command=self.destroy).pack(side="left")
+        ctk.CTkButton(btns, text="↑  Exportar", width=120, height=34,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 12, "bold"),
+                      command=self._ok).pack(side="right")
+
+    def _ok(self):
+        self.resultado = [ip for ip, var in self._checks.items() if var.get()]
+        if not self.resultado:
+            return
         self.destroy()
 
 
