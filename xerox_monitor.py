@@ -318,6 +318,15 @@ async def _snmp_info_extra(ip, comunidad, timeout):
             )
             if errI or errS: continue
             for _, val in vb:
+                if clave == "mac":
+                    # OctetString → leer bytes crudos para MAC
+                    try:
+                        raw_b = bytes(val)
+                        if len(raw_b) == 6:
+                            info[clave] = ':'.join(f'{b:02X}' for b in raw_b)
+                            continue
+                    except Exception:
+                        pass
                 v = str(val).strip()
                 if "No Such" in v or "End of" in v or not v: continue
                 info[clave] = v
@@ -448,6 +457,14 @@ async def _snmp_detalles_async(ip, comunidad, timeout):
             )
             if errI or errS: continue
             for _, val in vb:
+                if clave == "mac":
+                    try:
+                        raw_b = bytes(val)
+                        if len(raw_b) == 6:
+                            info[clave] = ':'.join(f'{b:02X}' for b in raw_b)
+                            continue
+                    except Exception:
+                        pass
                 v = str(val).strip()
                 if "No Such" in v or "End of" in v or not v: continue
                 info[clave] = v
@@ -868,125 +885,189 @@ class DialogDetalles(ctk.CTkToplevel):
     """Diálogo de detalles del dispositivo estilo BRAdmin."""
 
     _FILAS = [
-        # (clave_info, etiqueta, transformación_opcional)
-        ("sys_nombre",   "Nombre de nodo",           None),
-        ("serial",       "Número de serie",           None),
-        ("imp_nombre",   "Nombre impresora",          None),
-        ("mac",          "Dirección MAC",             _formatear_mac),
-        ("sys_location", "Ubicación",                 None),
-        ("sys_contact",  "Contacto",                  None),
-        ("modelo",       "Modelo / Descripción",      None),
-        ("sys_desc",     "Descripción sistema",       None),
-        ("sys_uptime",   "Tiempo encendida",          "_uptime"),
-        ("estado_imp",   "Estado impresora",          "_estado"),
-        ("paginas",      "Páginas totales (vida)",    "_num"),
-        ("paginas_on",   "Páginas desde encendido",   "_num"),
-        ("bandeja_nivel","Bandeja 1 — nivel",         "_num"),
-        ("bandeja_cap",  "Bandeja 1 — capacidad",     "_num"),
-        ("bandeja2_nivel","Bandeja 2 — nivel",        "_num"),
-        ("bandeja2_cap", "Bandeja 2 — capacidad",     "_num"),
-        ("output_nivel", "Salida — nivel",            "_num"),
-        ("output_cap",   "Salida — capacidad",        "_num"),
-        ("if_desc",      "Interfaz de red",           None),
-        ("if_speed",     "Velocidad de red",          "_speed"),
-        ("if_mtu",       "MTU",                       "_num"),
-        ("mem_total",    "Memoria total (bloques)",   "_num"),
-        ("mem_usada",    "Memoria usada (bloques)",   "_num"),
-        ("idioma",       "Localización consola",      None),
+        # (clave, etiqueta, transform)  transform: None | "_uptime"|"_estado"|"_num"|"_speed"
+        ("sys_nombre",    "Nombre de nodo",          None),
+        ("serial",        "Número de serie",         None),
+        ("imp_nombre",    "Nombre impresora",        None),
+        ("mac",           "Dirección MAC",           None),   # ya viene formateado desde bytes
+        ("sys_location",  "Ubicación",               None),
+        ("sys_contact",   "Contacto",                None),
+        ("modelo",        "Modelo",                  None),
+        ("sys_desc",      "Descripción sistema",     None),
+        ("sys_uptime",    "Tiempo encendida",        "_uptime"),
+        ("estado_imp",    "Estado impresora",        "_estado"),
+        ("paginas",       "Páginas totales",         "_num"),
+        ("paginas_on",    "Páginas desde encendido", "_num"),
+        ("bandeja_nivel", "Bandeja 1 — nivel",       "_num"),
+        ("bandeja_cap",   "Bandeja 1 — capacidad",   "_num"),
+        ("bandeja2_nivel","Bandeja 2 — nivel",       "_num"),
+        ("bandeja2_cap",  "Bandeja 2 — capacidad",   "_num"),
+        ("output_nivel",  "Salida — nivel",          "_num"),
+        ("output_cap",    "Salida — capacidad",      "_num"),
+        ("if_desc",       "Interfaz de red",         None),
+        ("if_speed",      "Velocidad de red",        "_speed"),
+        ("if_mtu",        "MTU",                     "_num"),
+        ("mem_total",     "Memoria total",           "_num"),
+        ("mem_usada",     "Memoria usada",           "_num"),
+        ("idioma",        "Localización consola",    None),
     ]
 
     def __init__(self, parent, ip, imp_nombre, comunidad, timeout):
         super().__init__(parent)
-        self.title(f"Detalles — {imp_nombre}")
-        self.geometry("560x560")
-        self.minsize(480, 400)
+        self._ip = ip
+        self._nombre = imp_nombre
+        self._comunidad = comunidad
+        self._timeout = timeout
+        self.title(f"Detalles del dispositivo")
+        self.geometry("660x540")
+        self.minsize(560, 420)
         self.configure(fg_color=BG2)
+        self.resizable(True, True)
         self.grab_set(); self.lift(); self.focus_force()
+        self._build_ui(imp_nombre, ip)
+        self._tree.insert("", "end", values=("Consultando dispositivo…", ""))
+        threading.Thread(target=self._cargar, args=(ip, comunidad, timeout), daemon=True).start()
 
-        # Header
-        hdr = ctk.CTkFrame(self, fg_color=BG3, corner_radius=0)
-        hdr.pack(fill="x")
-        ctk.CTkLabel(hdr, text=f"🖨  {imp_nombre}",
-                     font=("Segoe UI", 13, "bold"), text_color=TEXT).pack(side="left", padx=16, pady=10)
-        ctk.CTkLabel(hdr, text=ip, font=("Consolas", 11),
-                     text_color=TEXT2).pack(side="left")
-        self._lbl_estado = ctk.CTkLabel(hdr, text="Consultando...",
-                                         font=("Segoe UI", 10), text_color=TEXT2)
-        self._lbl_estado.pack(side="right", padx=16)
+    def _build_ui(self, imp_nombre, ip):
+        # ── Layout principal: izquierda (panel info) + derecha (tabla) ──
+        main = tk.Frame(self, bg=BG2)
+        main.pack(fill="both", expand=True)
 
-        # Tabla estilo BRAdmin
-        frame = tk.Frame(self, bg=BG)
-        frame.pack(fill="both", expand=True, padx=12, pady=10)
+        # Panel izquierdo estilo BRAdmin
+        left = tk.Frame(main, bg=BG3, width=190)
+        left.pack(side="left", fill="y", padx=(0,0))
+        left.pack_propagate(False)
+
+        # Icono impresora
+        tk.Label(left, text="🖨", font=("Segoe UI", 42), bg=BG3,
+                 fg=TEXT).pack(pady=(20,4))
+
+        # Nombre del modelo (se actualiza al cargar)
+        self._lbl_modelo = tk.Label(left, text=imp_nombre, font=("Segoe UI", 9, "bold"),
+                                     bg=BG3, fg=TEXT, wraplength=175, justify="center")
+        self._lbl_modelo.pack(padx=8, pady=(0,2))
+        tk.Label(left, text=ip, font=("Consolas", 9), bg=BG3,
+                 fg=TEXT2).pack(pady=(0,8))
+
+        # Separador
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=4)
+
+        # Estado (se actualiza al cargar)
+        self._lbl_estado_dot = tk.Label(left, text="●  Consultando...",
+                                         font=("Segoe UI", 10), bg=BG3, fg=TEXT2)
+        self._lbl_estado_dot.pack(pady=(4,2))
+
+        # Páginas (se actualiza al cargar)
+        self._lbl_pag = tk.Label(left, text="", font=("Segoe UI", 9), bg=BG3, fg=TEXT2)
+        self._lbl_pag.pack(pady=(0,4))
+
+        # Separador
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=4)
+
+        # MAC (se actualiza al cargar)
+        tk.Label(left, text="MAC", font=("Segoe UI", 8), bg=BG3, fg=TEXT2).pack()
+        self._lbl_mac = tk.Label(left, text="—", font=("Consolas", 9), bg=BG3,
+                                  fg=TEXT, wraplength=175, justify="center")
+        self._lbl_mac.pack(pady=(0,6))
+
+        # Botón OK abajo en el panel izquierdo
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=10, pady=(8,4), side="bottom")
+        ctk.CTkButton(left, text="Cerrar", width=120, height=30,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 11), command=self.destroy).pack(side="bottom", pady=10)
+
+        # Panel derecho: tabla
+        right = tk.Frame(main, bg=BG2)
+        right.pack(side="left", fill="both", expand=True)
 
         style = ttk.Style()
         style.configure("Det.Treeview", background=BG2, fieldbackground=BG2,
-                        foreground=TEXT, rowheight=24, font=("Segoe UI", 10),
+                        foreground=TEXT, rowheight=22, font=("Segoe UI", 10),
                         borderwidth=0)
         style.configure("Det.Treeview.Heading", background=BG3, foreground=TEXT2,
                         font=("Segoe UI", 10, "bold"), relief="flat")
-        style.map("Det.Treeview", background=[("selected", ROW_SEL)],
+        style.map("Det.Treeview",
+                  background=[("selected", ACCENT)],
                   foreground=[("selected", TEXT)])
 
-        self._tree = ttk.Treeview(frame, columns=("elem","val"), show="headings",
+        self._tree = ttk.Treeview(right, columns=("elem","val"), show="headings",
                                    style="Det.Treeview", selectmode="browse")
         self._tree.heading("elem", text="Elemento")
         self._tree.heading("val",  text="Valor")
-        self._tree.column("elem", width=230, anchor="w", stretch=False)
-        self._tree.column("val",  width=280, anchor="w", stretch=True)
-        self._tree.tag_configure("alt", background=BG3)
+        self._tree.column("elem", width=200, minwidth=150, anchor="w", stretch=False)
+        self._tree.column("val",  width=300, anchor="w", stretch=True)
+        self._tree.tag_configure("alt",  background="#1e2238")
+        self._tree.tag_configure("head", background=BG3, foreground=TEXT2)
 
-        vsb = ttk.Scrollbar(frame, orient="vertical", command=self._tree.yview)
+        vsb = ttk.Scrollbar(right, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True)
 
-        # Botón cerrar
-        ctk.CTkButton(self, text="Cerrar", width=120, height=32,
-                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
-                      font=("Segoe UI", 11), command=self.destroy).pack(pady=(0,12))
-
-        # Cargar datos en hilo
-        self._tree.insert("", "end", values=("Consultando dispositivo…", ""))
-        threading.Thread(target=self._cargar, args=(ip, comunidad, timeout), daemon=True).start()
-
     def _cargar(self, ip, comunidad, timeout):
         info = obtener_detalles(ip, comunidad, timeout)
         self.after(0, lambda: self._poblar(info))
+
+    @staticmethod
+    def _fmt(val, transform):
+        if transform == "_uptime":  return _formatear_uptime(val)
+        if transform == "_estado":  return ESTADO_IMP_MAP.get(val, val)
+        if transform == "_num":
+            try: return f"{int(val):,}".replace(",",".")
+            except: return val
+        if transform == "_speed":
+            try:
+                bps = int(val)
+                return f"{bps//1_000_000} Mbps" if bps >= 1_000_000 else f"{bps//1_000} Kbps"
+            except: return val
+        return val
 
     def _poblar(self, info):
         for row in self._tree.get_children():
             self._tree.delete(row)
 
         if not info:
-            self._tree.insert("", "end", values=("Sin respuesta del dispositivo", ""))
-            self._lbl_estado.configure(text="Sin respuesta", text_color=CRIT)
+            self._lbl_estado_dot.configure(text="●  Sin respuesta", fg=CRIT)
+            self._tree.insert("", "end", values=("Sin respuesta del dispositivo", "—"))
             return
 
-        self._lbl_estado.configure(text="OK", text_color=OK)
-        alt = False
-        for clave, etiqueta, transform in self._FILAS:
-            val = info.get(clave)
-            if not val:
-                continue
-            # Aplicar transformación
-            if transform == "_uptime":
-                val = _formatear_uptime(val)
-            elif transform == "_estado":
-                val = ESTADO_IMP_MAP.get(val, val)
-            elif transform == "_num":
-                try: val = f"{int(val):,}".replace(",",".")
-                except: pass
-            elif transform == "_speed":
-                try:
-                    bps = int(val)
-                    val = f"{bps//1_000_000} Mbps" if bps >= 1_000_000 else f"{bps//1_000} Kbps"
-                except: pass
-            elif callable(transform):
-                val = transform(val)
+        # Actualizar panel izquierdo
+        modelo = info.get("modelo") or info.get("sys_desc","").split(";")[0][:40] or self._nombre
+        self._lbl_modelo.configure(text=modelo)
+        estado_txt = ESTADO_IMP_MAP.get(info.get("estado_imp",""), "Disponible")
+        self._lbl_estado_dot.configure(text=f"●  {estado_txt}", fg=OK)
+        if info.get("paginas"):
+            try: pag_fmt = f"{int(info['paginas']):,}".replace(",",".")
+            except: pag_fmt = info["paginas"]
+            self._lbl_pag.configure(text=f"{pag_fmt} páginas")
+        if info.get("mac"):
+            self._lbl_mac.configure(text=info["mac"])
 
-            tag = "alt" if alt else ""
-            self._tree.insert("", "end", values=(etiqueta, val), tags=(tag,))
-            alt = not alt
+        # Poblar tabla agrupada por secciones
+        secciones = [
+            ("SISTEMA", ["sys_nombre","serial","imp_nombre","mac","sys_location","sys_contact"]),
+            ("DISPOSITIVO", ["modelo","sys_desc","estado_imp","sys_uptime"]),
+            ("PÁGINAS", ["paginas","paginas_on"]),
+            ("BANDEJAS", ["bandeja_nivel","bandeja_cap","bandeja2_nivel","bandeja2_cap","output_nivel","output_cap"]),
+            ("RED", ["if_desc","if_speed","if_mtu"]),
+            ("SISTEMA (HOST)", ["mem_total","mem_usada","idioma"]),
+        ]
+        fila_map = {c:(e,t) for c,e,t in self._FILAS}
+        alt = False
+        for sec_titulo, claves in secciones:
+            filas_sec = []
+            for clave in claves:
+                val = info.get(clave)
+                if not val: continue
+                etiqueta, transform = fila_map[clave]
+                filas_sec.append((etiqueta, self._fmt(val, transform)))
+            if not filas_sec:
+                continue
+            self._tree.insert("", "end", values=(sec_titulo, ""), tags=("head",))
+            for etiqueta, valor in filas_sec:
+                tag = "alt" if alt else ""
+                self._tree.insert("", "end", values=(f"  {etiqueta}", valor), tags=(tag,))
+                alt = not alt
 
 
 class DialogWebPins(ctk.CTkToplevel):
