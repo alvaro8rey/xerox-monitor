@@ -37,7 +37,7 @@ SNMP_ERROR = ""
 try:
     from pysnmp.hlapi.v1arch.asyncio import (
         SnmpDispatcher, CommunityData, UdpTransportTarget,
-        ObjectType, ObjectIdentity, get_cmd
+        ObjectType, ObjectIdentity, get_cmd, next_cmd
     )
     SNMP_OK = True
 except Exception as e:
@@ -298,6 +298,91 @@ async def _snmp_info_extra(ip, comunidad, timeout):
 def obtener_info_extra(ip, comunidad="public", timeout=2.0):
     try:    return asyncio.run(_snmp_info_extra(ip, comunidad, timeout))
     except: return {}
+
+# Mapeo de códigos prtAlertCode → texto en español
+_ALERT_CODE_MAP = {
+    3:    "Cubierta abierta",
+    5:    "Enclavamiento abierto",
+    8:    "Atasco de papel",
+    16:   "Papel bajo",
+    17:   "Sin papel",
+    501:  "Consumible bajo",
+    502:  "Consumible agotado",
+    503:  "Consumible erróneo",
+    801:  "Fusor: fin de vida próximo",
+    802:  "Fusor: fin de vida",
+    901:  "Unidad limpieza: fin próximo",
+    902:  "Unidad limpieza: agotada",
+    1101: "Pedir suministro ya",
+    1102: "Residuos casi llenos",
+    1103: "Residuos llenos",
+    1104: "Consumible no autenticado",
+}
+_ALERT_SEV_MAP = {
+    "3": ("critical", "🔴"),
+    "4": ("warning",  "🟡"),
+    "5": ("info",     "🔵"),
+}
+
+async def _snmp_alertas_async(ip, comunidad, timeout):
+    """Lee la tabla prtAlert (1.3.6.1.2.1.43.18.1.1) y devuelve alertas activas."""
+    dispatcher = SnmpDispatcher()
+    try:
+        transport = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=1)
+    except Exception:
+        return []
+
+    alertas = []
+    BASE_ALERT = "1.3.6.1.2.1.43.18.1.1"
+    # Recorremos índices 1..15 (más que suficiente para cualquier impresora)
+    for idx in range(1, 16):
+        sev_oid  = f"{BASE_ALERT}.2.1.{idx}"
+        code_oid = f"{BASE_ALERT}.8.1.{idx}"
+        desc_oid = f"{BASE_ALERT}.11.1.{idx}"
+        row = {}
+        any_found = False
+        for campo, oid in (("sev", sev_oid), ("code", code_oid), ("desc", desc_oid)):
+            try:
+                errI, errS, _, vb = await get_cmd(
+                    dispatcher, CommunityData(comunidad), transport,
+                    ObjectType(ObjectIdentity(oid))
+                )
+                if errI or errS:
+                    continue
+                for _, val in vb:
+                    v = str(val).strip()
+                    if "No Such" in v or "End of" in v or not v:
+                        continue
+                    row[campo] = v
+                    any_found = True
+            except Exception:
+                pass
+        if not any_found:
+            break  # tabla terminada
+        sev = row.get("sev", "0")
+        if sev in ("0", "1", "2"):  # 0=desconocido, 1=otro, 2=informacional menor
+            continue
+        code_raw = row.get("code", "")
+        try:
+            code_int = int(code_raw)
+        except Exception:
+            code_int = 0
+        desc_raw = row.get("desc", "").strip()
+        texto = _ALERT_CODE_MAP.get(code_int) or (desc_raw if desc_raw else f"Código {code_raw}")
+        nivel, icono = _ALERT_SEV_MAP.get(sev, ("warning", "🟡"))
+        alertas.append({"nivel": nivel, "icono": icono, "texto": texto, "code": code_int})
+
+    # Deduplicar por texto (algunas impresoras repiten la misma alerta)
+    seen, unique = set(), []
+    for a in alertas:
+        if a["texto"] not in seen:
+            seen.add(a["texto"])
+            unique.append(a)
+    return unique
+
+def obtener_alertas(ip, comunidad="public", timeout=2.0):
+    try:    return asyncio.run(_snmp_alertas_async(ip, comunidad, timeout))
+    except: return []
 
 def _formatear_uptime(raw):
     """Convierte TimeTicks SNMP (centésimas de segundo) a texto legible."""
@@ -2321,7 +2406,21 @@ class App(ctk.CTk):
             if info.get("sys_uptime"):
                 fila("Uptime:", _formatear_uptime(info["sys_uptime"]))
 
-        # ── F) Sección CONSUMIBLES con barras ──
+        # ── F) Sección ALERTAS ──
+        alerts = cache.get("alerts") or []
+        if alerts:
+            sep_line()
+            seccion("ALERTAS ACTIVAS")
+            for a in alerts:
+                color_a = CRIT if a["nivel"] == "critical" else WARN if a["nivel"] == "warning" else TEXT2
+                f = ctk.CTkFrame(sc, fg_color="transparent")
+                f.pack(fill="x", padx=14, pady=1)
+                ctk.CTkLabel(f, text=a["icono"], font=("Segoe UI", 11),
+                             text_color=color_a, width=20).pack(side="left")
+                ctk.CTkLabel(f, text=a["texto"], font=("Segoe UI", 10),
+                             text_color=color_a, anchor="w", wraplength=210).pack(side="left", padx=(4, 0))
+
+        # ── G) Sección CONSUMIBLES con barras ──
         sep_line()
         seccion("CONSUMIBLES")
 
@@ -2391,7 +2490,13 @@ class App(ctk.CTk):
 
             dot  = {"ok":"●","alerta":"●","critico":"●","offline":"○","pendiente":"…"}.get(estado,"?")
             elbl = {"ok":"OK","alerta":"Alerta","critico":"Crítico","offline":"Offline","pendiente":"—"}.get(estado,"")
-            estado_str = f"{dot}  {elbl}"
+            alerts = cache.get("alerts") or []
+            n_crit = sum(1 for a in alerts if a["nivel"] == "critical")
+            n_warn = sum(1 for a in alerts if a["nivel"] == "warning")
+            badge = ""
+            if n_crit:  badge += f"  🔴{n_crit}"
+            if n_warn:  badge += f"  🟡{n_warn}"
+            estado_str = f"{dot}  {elbl}{badge}"
 
             tag = estado if estado in ("ok","alerta","critico","offline") else "ok"
             if alt and tag == "ok":
@@ -2457,6 +2562,7 @@ class App(ctk.CTk):
             com = imp.get("comunidad") or self.cfg["comunidad_snmp"]
             cons, err = obtener_consumibles(ip, com, self.cfg["timeout_snmp"])
             info = obtener_info_extra(ip, com, self.cfg["timeout_snmp"]) if not err else {}
+            alerts = obtener_alertas(ip, com, self.cfg["timeout_snmp"]) if not err else []
             if err:
                 est = "offline"
             else:
@@ -2464,7 +2570,7 @@ class App(ctk.CTk):
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
                 if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
-            self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
+            self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:
                 self.after(0, lambda: self._panel_detalle(ip))
@@ -2479,6 +2585,7 @@ class App(ctk.CTk):
                        self.lbl_scan.configure(text=t))
             cons, err = obtener_consumibles(ip, com, self.cfg["timeout_snmp"])
             info = obtener_info_extra(ip, com, self.cfg["timeout_snmp"]) if not err else {}
+            alerts = obtener_alertas(ip, com, self.cfg["timeout_snmp"]) if not err else []
             if err:
                 est = "offline"
             else:
@@ -2486,7 +2593,7 @@ class App(ctk.CTk):
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
                 if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
-            self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
+            self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:
                 self.after(0, lambda _ip=ip: self._panel_detalle(_ip))
@@ -2634,6 +2741,7 @@ class App(ctk.CTk):
         com = imp.get("comunidad") or self.cfg["comunidad_snmp"]
         cons, err = obtener_consumibles(ip, com, self.cfg["timeout_snmp"])
         info = obtener_info_extra(ip, com, self.cfg["timeout_snmp"]) if not err else {}
+        alerts = obtener_alertas(ip, com, self.cfg["timeout_snmp"]) if not err else []
         if err:
             est = "offline"
         else:
@@ -2641,7 +2749,7 @@ class App(ctk.CTk):
             ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
             est = "critico" if tc else "alerta" if ta else "ok"
             if cons: guardar_historial(ip, cons)
-        self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
+        self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
         self.after(0, self._poblar_tabla)
 
     # ── ESCANEO RED ───────────────────────────────────────────────────────────
