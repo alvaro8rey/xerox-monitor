@@ -262,16 +262,38 @@ def obtener_nombre_snmp(ip, comunidad="public", timeout=2.0):
 
 # OIDs adicionales útiles
 OIDS_INFO = {
-    "sys_desc":     "1.3.6.1.2.1.1.1.0",      # Descripción del sistema
-    "sys_nombre":   "1.3.6.1.2.1.1.5.0",      # Nombre del host (sysName)
-    "sys_uptime":   "1.3.6.1.2.1.1.3.0",      # Uptime del dispositivo
-    "paginas":      "1.3.6.1.2.1.43.10.2.1.4.1.1",  # Contador páginas impresas
-    "estado_imp":   "1.3.6.1.2.1.25.3.5.1.1.1",     # hrPrinterStatus (idle/printing/error)
-    "estado_det":   "1.3.6.1.2.1.25.3.5.1.2.1",     # hrPrinterDetectedErrorState
-    "modelo":       "1.3.6.1.2.1.25.3.2.1.3.1",     # hrDeviceDescr (modelo)
-    "serial":       "1.3.6.1.2.1.43.5.1.1.17.1",    # prtGeneralSerialNumber
-    "bandeja_cap":  "1.3.6.1.2.1.43.8.2.1.9.1.1",   # Capacidad bandeja entrada
-    "bandeja_nivel":"1.3.6.1.2.1.43.8.2.1.10.1.1",  # Nivel actual bandeja entrada
+    "sys_desc":     "1.3.6.1.2.1.1.1.0",
+    "sys_nombre":   "1.3.6.1.2.1.1.5.0",
+    "sys_uptime":   "1.3.6.1.2.1.1.3.0",
+    "sys_contact":  "1.3.6.1.2.1.1.4.0",
+    "sys_location": "1.3.6.1.2.1.1.6.0",
+    "mac":          "1.3.6.1.2.1.2.2.1.6.1",
+    "paginas":      "1.3.6.1.2.1.43.10.2.1.4.1.1",
+    "paginas_on":   "1.3.6.1.2.1.43.10.2.1.5.1.1",
+    "estado_imp":   "1.3.6.1.2.1.25.3.5.1.1.1",
+    "estado_det":   "1.3.6.1.2.1.25.3.5.1.2.1",
+    "modelo":       "1.3.6.1.2.1.25.3.2.1.3.1",
+    "serial":       "1.3.6.1.2.1.43.5.1.1.17.1",
+    "imp_nombre":   "1.3.6.1.2.1.43.5.1.1.16.1",
+    "bandeja_cap":  "1.3.6.1.2.1.43.8.2.1.9.1.1",
+    "bandeja_nivel":"1.3.6.1.2.1.43.8.2.1.10.1.1",
+    "bandeja2_cap": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+    "bandeja2_nivel":"1.3.6.1.2.1.43.8.2.1.10.1.2",
+    "output_cap":   "1.3.6.1.2.1.43.9.2.1.4.1.1",
+    "output_nivel": "1.3.6.1.2.1.43.9.2.1.5.1.1",
+    "idioma":       "1.3.6.1.2.1.43.5.1.1.10.1",
+}
+
+# OIDs extra solo para el diálogo de detalles (no se usan en el escaneo rápido)
+OIDS_DETALLES_EXTRA = {
+    "mem_total":    "1.3.6.1.2.1.25.2.3.1.5.1",
+    "mem_usada":    "1.3.6.1.2.1.25.2.3.1.6.1",
+    "cpu_load":     "1.3.6.1.2.1.25.3.3.1.2.1",
+    "if_speed":     "1.3.6.1.2.1.2.2.1.5.1",
+    "if_desc":      "1.3.6.1.2.1.2.2.1.2.1",
+    "if_mtu":       "1.3.6.1.2.1.2.2.1.4.1",
+    "tcp_in":       "1.3.6.1.2.1.6.10.0",
+    "tcp_out":      "1.3.6.1.2.1.6.11.0",
 }
 
 ESTADO_IMP_MAP = {
@@ -391,6 +413,51 @@ async def _snmp_alertas_async(ip, comunidad, timeout):
 def obtener_alertas(ip, comunidad="public", timeout=2.0):
     try:    return asyncio.run(_snmp_alertas_async(ip, comunidad, timeout))
     except: return []
+
+def _formatear_mac(raw):
+    """Convierte el valor SNMP ifPhysAddress a formato XX:XX:XX:XX:XX:XX."""
+    raw = str(raw).strip()
+    # pysnmp a veces devuelve "0x001122334455" o bytes repr o "00 11 22 ..."
+    import re as _re
+    hex_chars = _re.sub(r'[^0-9a-fA-F]', '', raw.replace("0x","").replace("0X",""))
+    if len(hex_chars) == 12:
+        return ':'.join(hex_chars[i:i+2].upper() for i in range(0,12,2))
+    # fallback: intentar leer como bytes repr
+    try:
+        nums = [int(x, 16) for x in _re.findall(r'[0-9a-fA-F]{2}', raw)]
+        if len(nums) == 6:
+            return ':'.join(f'{n:02X}' for n in nums)
+    except Exception:
+        pass
+    return raw
+
+async def _snmp_detalles_async(ip, comunidad, timeout):
+    """Obtiene todos los OIDs disponibles para el diálogo de detalles."""
+    todos = {**OIDS_INFO, **OIDS_DETALLES_EXTRA}
+    dispatcher = SnmpDispatcher()
+    info = {}
+    try:
+        transport = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=1)
+    except Exception:
+        return info
+    for clave, oid in todos.items():
+        try:
+            errI, errS, _, vb = await get_cmd(
+                dispatcher, CommunityData(comunidad), transport,
+                ObjectType(ObjectIdentity(oid))
+            )
+            if errI or errS: continue
+            for _, val in vb:
+                v = str(val).strip()
+                if "No Such" in v or "End of" in v or not v: continue
+                info[clave] = v
+        except Exception:
+            pass
+    return info
+
+def obtener_detalles(ip, comunidad="public", timeout=3.0):
+    try:    return asyncio.run(_snmp_detalles_async(ip, comunidad, timeout))
+    except: return {}
 
 def _formatear_uptime(raw):
     """Convierte TimeTicks SNMP (centésimas de segundo) a texto legible."""
@@ -797,6 +864,131 @@ class DialogImpresora(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 # DIALOGO CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
+class DialogDetalles(ctk.CTkToplevel):
+    """Diálogo de detalles del dispositivo estilo BRAdmin."""
+
+    _FILAS = [
+        # (clave_info, etiqueta, transformación_opcional)
+        ("sys_nombre",   "Nombre de nodo",           None),
+        ("serial",       "Número de serie",           None),
+        ("imp_nombre",   "Nombre impresora",          None),
+        ("mac",          "Dirección MAC",             _formatear_mac),
+        ("sys_location", "Ubicación",                 None),
+        ("sys_contact",  "Contacto",                  None),
+        ("modelo",       "Modelo / Descripción",      None),
+        ("sys_desc",     "Descripción sistema",       None),
+        ("sys_uptime",   "Tiempo encendida",          "_uptime"),
+        ("estado_imp",   "Estado impresora",          "_estado"),
+        ("paginas",      "Páginas totales (vida)",    "_num"),
+        ("paginas_on",   "Páginas desde encendido",   "_num"),
+        ("bandeja_nivel","Bandeja 1 — nivel",         "_num"),
+        ("bandeja_cap",  "Bandeja 1 — capacidad",     "_num"),
+        ("bandeja2_nivel","Bandeja 2 — nivel",        "_num"),
+        ("bandeja2_cap", "Bandeja 2 — capacidad",     "_num"),
+        ("output_nivel", "Salida — nivel",            "_num"),
+        ("output_cap",   "Salida — capacidad",        "_num"),
+        ("if_desc",      "Interfaz de red",           None),
+        ("if_speed",     "Velocidad de red",          "_speed"),
+        ("if_mtu",       "MTU",                       "_num"),
+        ("mem_total",    "Memoria total (bloques)",   "_num"),
+        ("mem_usada",    "Memoria usada (bloques)",   "_num"),
+        ("idioma",       "Localización consola",      None),
+    ]
+
+    def __init__(self, parent, ip, imp_nombre, comunidad, timeout):
+        super().__init__(parent)
+        self.title(f"Detalles — {imp_nombre}")
+        self.geometry("560x560")
+        self.minsize(480, 400)
+        self.configure(fg_color=BG2)
+        self.grab_set(); self.lift(); self.focus_force()
+
+        # Header
+        hdr = ctk.CTkFrame(self, fg_color=BG3, corner_radius=0)
+        hdr.pack(fill="x")
+        ctk.CTkLabel(hdr, text=f"🖨  {imp_nombre}",
+                     font=("Segoe UI", 13, "bold"), text_color=TEXT).pack(side="left", padx=16, pady=10)
+        ctk.CTkLabel(hdr, text=ip, font=("Consolas", 11),
+                     text_color=TEXT2).pack(side="left")
+        self._lbl_estado = ctk.CTkLabel(hdr, text="Consultando...",
+                                         font=("Segoe UI", 10), text_color=TEXT2)
+        self._lbl_estado.pack(side="right", padx=16)
+
+        # Tabla estilo BRAdmin
+        frame = tk.Frame(self, bg=BG)
+        frame.pack(fill="both", expand=True, padx=12, pady=10)
+
+        style = ttk.Style()
+        style.configure("Det.Treeview", background=BG2, fieldbackground=BG2,
+                        foreground=TEXT, rowheight=24, font=("Segoe UI", 10),
+                        borderwidth=0)
+        style.configure("Det.Treeview.Heading", background=BG3, foreground=TEXT2,
+                        font=("Segoe UI", 10, "bold"), relief="flat")
+        style.map("Det.Treeview", background=[("selected", ROW_SEL)],
+                  foreground=[("selected", TEXT)])
+
+        self._tree = ttk.Treeview(frame, columns=("elem","val"), show="headings",
+                                   style="Det.Treeview", selectmode="browse")
+        self._tree.heading("elem", text="Elemento")
+        self._tree.heading("val",  text="Valor")
+        self._tree.column("elem", width=230, anchor="w", stretch=False)
+        self._tree.column("val",  width=280, anchor="w", stretch=True)
+        self._tree.tag_configure("alt", background=BG3)
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._tree.pack(fill="both", expand=True)
+
+        # Botón cerrar
+        ctk.CTkButton(self, text="Cerrar", width=120, height=32,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 11), command=self.destroy).pack(pady=(0,12))
+
+        # Cargar datos en hilo
+        self._tree.insert("", "end", values=("Consultando dispositivo…", ""))
+        threading.Thread(target=self._cargar, args=(ip, comunidad, timeout), daemon=True).start()
+
+    def _cargar(self, ip, comunidad, timeout):
+        info = obtener_detalles(ip, comunidad, timeout)
+        self.after(0, lambda: self._poblar(info))
+
+    def _poblar(self, info):
+        for row in self._tree.get_children():
+            self._tree.delete(row)
+
+        if not info:
+            self._tree.insert("", "end", values=("Sin respuesta del dispositivo", ""))
+            self._lbl_estado.configure(text="Sin respuesta", text_color=CRIT)
+            return
+
+        self._lbl_estado.configure(text="OK", text_color=OK)
+        alt = False
+        for clave, etiqueta, transform in self._FILAS:
+            val = info.get(clave)
+            if not val:
+                continue
+            # Aplicar transformación
+            if transform == "_uptime":
+                val = _formatear_uptime(val)
+            elif transform == "_estado":
+                val = ESTADO_IMP_MAP.get(val, val)
+            elif transform == "_num":
+                try: val = f"{int(val):,}".replace(",",".")
+                except: pass
+            elif transform == "_speed":
+                try:
+                    bps = int(val)
+                    val = f"{bps//1_000_000} Mbps" if bps >= 1_000_000 else f"{bps//1_000} Kbps"
+                except: pass
+            elif callable(transform):
+                val = transform(val)
+
+            tag = "alt" if alt else ""
+            self._tree.insert("", "end", values=(etiqueta, val), tags=(tag,))
+            alt = not alt
+
+
 class DialogWebPins(ctk.CTkToplevel):
     """Gestión de PINs de acceso al servidor web."""
 
@@ -2361,13 +2553,14 @@ class App(ctk.CTk):
             foreground=[("selected", TEXT)])
         style.layout("F.Treeview", [("F.Treeview.treearea", {"sticky": "nswe"})])
 
-        cols = ("estado","nombre","ip","ubicacion","paginas","consumibles","ts")
+        cols = ("estado","nombre","ip","mac","ubicacion","paginas","consumibles","ts")
         self.tree = ttk.Treeview(tbl_frame, columns=cols, show="headings",
                                   style="F.Treeview", selectmode="browse")
         for col, hdr, w, stretch in [
             ("estado",     "Estado",       80,  False),
             ("nombre",     "Nombre",       190, True),
             ("ip",         "IP",           115, False),
+            ("mac",        "MAC",          130, False),
             ("ubicacion",  "Ubicación",    120, False),
             ("paginas",    "Páginas",      75,  False),
             ("consumibles","Consumibles",  280, True),
@@ -2467,18 +2660,29 @@ class App(ctk.CTk):
         # ── C) Botones de acción rápida ──
         acc = ctk.CTkFrame(sc, fg_color="transparent")
         acc.pack(fill="x", padx=10, pady=(2, 4))
-        ctk.CTkButton(acc, text="🌐 Web", width=80, height=28,
+        ctk.CTkButton(acc, text="🌐 Web", width=76, height=28,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
                       font=("Segoe UI", 10),
-                      command=lambda: webbrowser.open(f"http://{ip}")).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(acc, text="↺ Refrescar", width=90, height=28,
+                      command=lambda: webbrowser.open(f"http://{ip}")).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(acc, text="↺ Refrescar", width=86, height=28,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
-                      command=self._refrescar_sel).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(acc, text="↓ CSV", width=70, height=28,
+                      command=self._refrescar_sel).pack(side="left", padx=(0, 3))
+        ctk.CTkButton(acc, text="↓ CSV", width=60, height=28,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
                       command=lambda: self._exportar_csv(ip)).pack(side="left")
+
+        # Botón Detalles (fila separada, ancho completo)
+        _imp_det = next((i for i in self.impresoras if i["ip"]==ip), {})
+        _com_det = _imp_det.get("comunidad") or self.cfg["comunidad_snmp"]
+        _nom_det = info_cache.get("sys_nombre") or _imp_det.get("nombre", ip)
+        ctk.CTkButton(sc, text="🔍  Detalles del dispositivo", height=30,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 10),
+                      command=lambda: DialogDetalles(self, ip, _nom_det,
+                                                     _com_det, self.cfg["timeout_snmp"])
+                      ).pack(fill="x", padx=10, pady=(2, 4))
 
         # Helpers anclados al scroll
         def fila(lbl, val):
@@ -2635,9 +2839,10 @@ class App(ctk.CTk):
             # Usar hostname SNMP si está disponible, sino el nombre configurado
             info_cache = cache.get("info", {})
             nombre_mostrar = info_cache.get("sys_nombre") or imp["nombre"]
+            mac_str = _formatear_mac(info_cache["mac"]) if info_cache.get("mac") else "—"
 
             self.tree.insert("", "end", iid=ip, values=(
-                estado_str, nombre_mostrar, ip,
+                estado_str, nombre_mostrar, ip, mac_str,
                 imp.get("ubicacion",""), paginas_str, cons_str, ts_str
             ), tags=(tag,))
 
@@ -2654,7 +2859,7 @@ class App(ctk.CTk):
         else:
             self._sort_col = col
             self._sort_rev = False
-        idx = {"estado":0,"nombre":1,"ip":2,"ubicacion":3,"paginas":4,"consumibles":5,"ts":6}[col]
+        idx = {"estado":0,"nombre":1,"ip":2,"mac":3,"ubicacion":4,"paginas":5,"consumibles":6,"ts":7}[col]
         rows = [(self.tree.set(k, col), k) for k in self.tree.get_children()]
         rows.sort(reverse=self._sort_rev)
         for i, (_, k) in enumerate(rows):
