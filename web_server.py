@@ -173,6 +173,23 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 .sec-header td{background:#1c2a3a;color:#7ab4f5;font-weight:700;font-size:12px}
 .total-row td{background:#2c3057;font-weight:700;color:#4f8ef7}
 
+/* PIN MODAL */
+.pin-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center}
+.pin-overlay.show{display:flex}
+.pin-box{background:#232640;border:1px solid #353860;border-radius:12px;padding:32px 36px;text-align:center;min-width:280px}
+.pin-box h2{font-size:15px;margin-bottom:6px}
+.pin-box p{color:#8b92b8;font-size:12px;margin-bottom:20px}
+.pin-dots{display:flex;justify-content:center;gap:12px;margin-bottom:20px}
+.pin-dot{width:14px;height:14px;border-radius:50%;background:#2c3057;border:2px solid #353860;transition:background .15s}
+.pin-dot.filled{background:#4f8ef7;border-color:#4f8ef7}
+.pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:200px;margin:0 auto}
+.pin-key{background:#2c3057;border:none;color:#e8eaf0;font-size:18px;font-family:inherit;padding:14px;border-radius:8px;cursor:pointer;transition:background .15s}
+.pin-key:hover{background:#353860}
+.pin-key:active{background:#4f8ef7}
+.pin-err{color:#e74c3c;font-size:12px;min-height:18px;margin-top:8px}
+.pin-cancel{background:none;border:none;color:#8b92b8;font-size:12px;cursor:pointer;margin-top:14px;display:block;width:100%;text-align:center}
+.pin-cancel:hover{color:#e8eaf0}
+
 /* LOADER */
 .loader{text-align:center;padding:40px;color:#8b92b8}
 .spinner{display:inline-block;width:28px;height:28px;border:3px solid #353860;border-top-color:#4f8ef7;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}
@@ -193,8 +210,37 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 
 <nav>
   <button class="active" onclick="showTab('impresoras',this)">Impresoras</button>
-  <button onclick="showTab('contabilidad',this)">Contabilidad</button>
+  <button id="btn-cont" onclick="askPin(this)">Contabilidad</button>
 </nav>
+
+<div class="pin-overlay" id="pin-overlay">
+  <div class="pin-box">
+    <h2>🔒 Acceso restringido</h2>
+    <p>Introduce el PIN para acceder a Contabilidad</p>
+    <div class="pin-dots" id="pin-dots">
+      <div class="pin-dot" id="pd0"></div>
+      <div class="pin-dot" id="pd1"></div>
+      <div class="pin-dot" id="pd2"></div>
+      <div class="pin-dot" id="pd3"></div>
+    </div>
+    <div class="pin-keypad">
+      <button class="pin-key" onclick="pinKey('1')">1</button>
+      <button class="pin-key" onclick="pinKey('2')">2</button>
+      <button class="pin-key" onclick="pinKey('3')">3</button>
+      <button class="pin-key" onclick="pinKey('4')">4</button>
+      <button class="pin-key" onclick="pinKey('5')">5</button>
+      <button class="pin-key" onclick="pinKey('6')">6</button>
+      <button class="pin-key" onclick="pinKey('7')">7</button>
+      <button class="pin-key" onclick="pinKey('8')">8</button>
+      <button class="pin-key" onclick="pinKey('9')">9</button>
+      <button class="pin-key" onclick="pinKey('back')" style="font-size:14px">⌫</button>
+      <button class="pin-key" onclick="pinKey('0')">0</button>
+      <button class="pin-key" onclick="pinKey('clear')" style="font-size:12px">C</button>
+    </div>
+    <div class="pin-err" id="pin-err"></div>
+    <button class="pin-cancel" onclick="closePin()">Cancelar</button>
+  </div>
+</div>
 
 <section id="tab-impresoras" class="active">
   <div id="imp-table-wrap"><div class="loader"><span class="spinner"></span>Cargando datos...</div></div>
@@ -219,6 +265,10 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 let _impData = [];
 let _contData = [];
 
+let _pinUnlocked = false;
+let _pinBuffer   = '';
+const PIN_CORRECT = '2026';
+
 function showTab(name, btn) {
   document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
@@ -226,6 +276,50 @@ function showTab(name, btn) {
   btn.classList.add('active');
   if (name === 'contabilidad' && _contData.length === 0) loadContabilidad();
 }
+
+function askPin(btn) {
+  if (_pinUnlocked) { showTab('contabilidad', btn); return; }
+  _pinBuffer = '';
+  updatePinDots();
+  document.getElementById('pin-err').textContent = '';
+  document.getElementById('pin-overlay').classList.add('show');
+}
+
+function closePin() {
+  document.getElementById('pin-overlay').classList.remove('show');
+  _pinBuffer = '';
+  updatePinDots();
+}
+
+function pinKey(k) {
+  if (k === 'back')  { _pinBuffer = _pinBuffer.slice(0,-1); }
+  else if (k==='clear') { _pinBuffer = ''; }
+  else if (_pinBuffer.length < 4) { _pinBuffer += k; }
+  updatePinDots();
+  document.getElementById('pin-err').textContent = '';
+  if (_pinBuffer.length === 4) {
+    if (_pinBuffer === PIN_CORRECT) {
+      _pinUnlocked = true;
+      closePin();
+      showTab('contabilidad', document.getElementById('btn-cont'));
+    } else {
+      document.getElementById('pin-err').textContent = 'PIN incorrecto';
+      setTimeout(() => { _pinBuffer=''; updatePinDots(); }, 700);
+    }
+  }
+}
+
+function updatePinDots() {
+  for (let i=0;i<4;i++)
+    document.getElementById('pd'+i).classList.toggle('filled', i < _pinBuffer.length);
+}
+
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('pin-overlay').classList.contains('show')) return;
+  if (e.key>='0' && e.key<='9') pinKey(e.key);
+  else if (e.key==='Backspace') pinKey('back');
+  else if (e.key==='Escape') closePin();
+});
 
 // ── IMPRESORAS ────────────────────────────────────────────────────────────────
 async function loadImpresoras() {
