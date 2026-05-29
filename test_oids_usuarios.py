@@ -1,115 +1,119 @@
 """
-Test de OIDs Xerox propietarios para conteo por usuario.
+Test SNMP Xerox - diagnóstico completo de OIDs con datos.
 Uso: python test_oids_usuarios.py
 """
 import asyncio
 from pysnmp.hlapi.v1arch.asyncio import (
     SnmpDispatcher, CommunityData, UdpTransportTarget,
-    ObjectType, ObjectIdentity, get_cmd, bulk_cmd
+    ObjectType, ObjectIdentity, get_cmd
 )
 
 IP        = "10.55.161.248"
 COMUNIDAD = "public"
-TIMEOUT   = 3.0
+TIMEOUT   = 2.0
 
-# OIDs a explorar
-OIDS_TEST = {
-    "user_names_base":   "1.3.6.1.4.1.253.8.53.15",
-    "user_counter_base": "1.3.6.1.4.1.253.8.53.14",
-    # Variantes comunes con subíndices
-    "user_names_1":      "1.3.6.1.4.1.253.8.53.15.1",
-    "user_names_2":      "1.3.6.1.4.1.253.8.53.15.2",
-    "user_counter_1":    "1.3.6.1.4.1.253.8.53.14.1",
-    "user_counter_2":    "1.3.6.1.4.1.253.8.53.14.2",
-}
+# Ramas a explorar en busca de OIDs con datos reales
+RAMAS = [
+    # Xerox propietario - contabilidad
+    ("Xerox accounting .8.53",    "1.3.6.1.4.1.253.8.53",    30, 5),
+    ("Xerox accounting .8.61",    "1.3.6.1.4.1.253.8.61",    30, 5),
+    ("Xerox accounting .8.62",    "1.3.6.1.4.1.253.8.62",    30, 5),
+    # Job Monitoring MIB (RFC 2707) - estándar, a veces implementado
+    ("Job Monitor MIB",           "1.3.6.1.4.1.2699.1.1",    20, 5),
+    # Xerox MIB raíz
+    ("Xerox root .8.51",          "1.3.6.1.4.1.253.8.51",    20, 5),
+    ("Xerox root .8.52",          "1.3.6.1.4.1.253.8.52",    20, 5),
+    ("Xerox root .8.56",          "1.3.6.1.4.1.253.8.56",    20, 5),
+    ("Xerox root .8.57",          "1.3.6.1.4.1.253.8.57",    20, 5),
+    # HR MIB - contadores de trabajos
+    ("hrStorage",                 "1.3.6.1.2.1.25.2.3.1",    10, 5),
+    ("prtInterpreter",            "1.3.6.1.2.1.43.15.1.1",   10, 5),
+    ("prtChannel",                "1.3.6.1.2.1.43.14.1.1",   10, 5),
+    ("prtJob (si existe)",        "1.3.6.1.2.1.43.13.1.1",   10, 5),
+]
 
-async def get_one(dispatcher, transport, oid):
-    errI, errS, _, vb = await get_cmd(
-        dispatcher, CommunityData(COMUNIDAD), transport,
-        ObjectType(ObjectIdentity(oid))
-    )
-    if errI or errS:
-        return f"ERROR: {errI or errS}"
-    for _, val in vb:
-        v = str(val)
-        if "No Such" in v or "End of" in v:
-            return f"No responde ({v[:40]})"
-        return v
-    return "Sin datos"
-
-async def walk_oid(dispatcher, transport, base_oid, max_rows=30):
-    """Hace un SNMP walk manual probando índices del 1 al max_rows."""
-    resultados = {}
-    for i in range(1, max_rows + 1):
-        oid = f"{base_oid}.{i}"
-        errI, errS, _, vb = await get_cmd(
-            dispatcher, CommunityData(COMUNIDAD), transport,
-            ObjectType(ObjectIdentity(oid))
-        )
-        if errI or errS:
-            break
-        for _, val in vb:
-            v = str(val)
-            if "No Such" in v or "End of" in v:
-                return resultados
-            resultados[i] = v
-    return resultados
+async def walk_rama(dispatcher, transport, base_oid, max_sub, max_idx):
+    """
+    Walk 2D: prueba base.sub.idx para sub en 1..max_sub, idx en 1..max_idx.
+    Devuelve lista de (oid_completo, tipo, valor) con datos reales.
+    """
+    encontrados = []
+    for sub in range(1, max_sub + 1):
+        for idx in range(1, max_idx + 1):
+            oid = f"{base_oid}.{sub}.{idx}"
+            try:
+                errI, errS, _, vb = await get_cmd(
+                    dispatcher, CommunityData(COMUNIDAD), transport,
+                    ObjectType(ObjectIdentity(oid))
+                )
+                if errI or errS:
+                    continue
+                for _, val in vb:
+                    tipo = type(val).__name__
+                    v = str(val)
+                    if "No Such" in v or "End of" in v:
+                        continue
+                    if v.strip():  # solo si tiene valor no vacío
+                        encontrados.append((oid, tipo, v))
+            except Exception:
+                pass
+    return encontrados
 
 async def main():
-    print(f"\n{'='*60}")
-    print(f"  Test OIDs Xerox por usuario")
+    print(f"\n{'='*65}")
+    print(f"  Diagnóstico SNMP Xerox - búsqueda de OIDs con datos")
     print(f"  IP: {IP}  |  Comunidad: {COMUNIDAD}")
-    print(f"{'='*60}\n")
+    print(f"{'='*65}\n")
 
     dispatcher = SnmpDispatcher()
     try:
-        transport = await UdpTransportTarget.create((IP, 161), timeout=TIMEOUT, retries=1)
+        transport = await UdpTransportTarget.create((IP, 161), timeout=TIMEOUT, retries=0)
     except Exception as e:
         print(f"[ERROR] No se pudo conectar: {e}")
         return
 
-    # 1. GET simple de cada OID
-    print("── GET directo de OIDs base ──────────────────────────────")
-    for nombre, oid in OIDS_TEST.items():
-        resultado = await get_one(dispatcher, transport, oid)
-        print(f"  {nombre:<22} ({oid})")
-        print(f"    → {resultado}\n")
+    # Verificar conectividad básica
+    errI, errS, _, vb = await get_cmd(
+        dispatcher, CommunityData(COMUNIDAD), transport,
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0"))
+    )
+    for _, val in vb:
+        print(f"  Dispositivo: {val}\n")
 
-    # 2. Walk de la rama de nombres de usuario (índices 1..30)
-    print("\n── WALK .1.3.6.1.4.1.253.8.53.15 (nombres de usuario) ───")
-    nombres = await walk_oid(dispatcher, transport, "1.3.6.1.4.1.253.8.53.15", 30)
-    if nombres:
-        for idx, val in nombres.items():
-            print(f"  [{idx:>2}] {val}")
-    else:
-        print("  Sin respuesta en ningún índice.")
+    total_encontrados = 0
 
-    # 3. Walk de la rama de contadores (índices 1..30)
-    print("\n── WALK .1.3.6.1.4.1.253.8.53.14 (contadores) ──────────")
-    contadores = await walk_oid(dispatcher, transport, "1.3.6.1.4.1.253.8.53.14", 30)
-    if contadores:
-        for idx, val in contadores.items():
-            print(f"  [{idx:>2}] {val}")
-    else:
-        print("  Sin respuesta en ningún índice.")
+    for nombre, base, max_sub, max_idx in RAMAS:
+        print(f"── {nombre} ({base}) ", end="", flush=True)
+        resultados = await walk_rama(dispatcher, transport, base, max_sub, max_idx)
+        if resultados:
+            print(f"→ {len(resultados)} OIDs con datos:")
+            for oid, tipo, val in resultados:
+                print(f"    {oid}")
+                print(f"      tipo={tipo}  valor={val!r}")
+            total_encontrados += len(resultados)
+        else:
+            print("→ sin datos")
 
-    # 4. Si encontramos ambos, intentar cruzarlos
-    if nombres and contadores:
-        print("\n── CRUCE nombre ↔ contador ──────────────────────────────")
-        for idx in sorted(nombres):
-            nombre_u = nombres.get(idx, "?")
-            contador = contadores.get(idx, "—")
-            print(f"  [{idx:>2}] {nombre_u:<30} páginas: {contador}")
+    print(f"\n{'='*65}")
+    print(f"  Total OIDs con datos encontrados: {total_encontrados}")
 
-    # 5. Explorar subárboles adicionales de la MIB Xerox
-    print("\n── Exploración ramas adicionales Xerox (.8.53.x) ────────")
-    for rama in range(10, 20):
-        oid_test = f"1.3.6.1.4.1.253.8.53.{rama}.1"
-        r = await get_one(dispatcher, transport, oid_test)
-        if "No responde" not in r and "ERROR" not in r:
-            print(f"  .8.53.{rama}.1 → {r}")
+    if total_encontrados == 0:
+        print("""
+  DIAGNÓSTICO: La impresora no expone contadores por usuario vía SNMP.
 
-    print(f"\n{'='*60}\n")
+  Posibles causas:
+    1. Network Accounting desactivado en la impresora.
+       → Entrar al panel web (http://10.55.161.248) como admin
+         → Propiedades → Contabilidad → Activar "Network Accounting"
+         → Crear usuarios con sus cuotas
+
+    2. Los datos requieren SNMPv3 con autenticación (no community public).
+       → Habría que configurar un usuario SNMPv3 en la impresora.
+
+    3. Esta impresora no implementa contabilidad por usuario vía SNMP.
+       → Alternativa: scraping del panel web con requests+BeautifulSoup.
+""")
+    print(f"{'='*65}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())
