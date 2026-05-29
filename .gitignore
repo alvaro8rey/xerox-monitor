@@ -1,0 +1,6 @@
+venv/ 
+__pycache__/ 
+impresoras.json 
+historial.json 
+config.json 
+*.pyc 

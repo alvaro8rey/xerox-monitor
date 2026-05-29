@@ -1,0 +1,4 @@
+customtkinter>=5.2.0
+pysnmp>=7.0.0
+pyasn1>=0.4.8,<0.6.1
+openpyxl>=3.1.0
