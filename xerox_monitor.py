@@ -1040,15 +1040,34 @@ class DialogContabilidad(ctk.CTkToplevel):
         messagebox.showinfo("Importado", f"✔  {len(filas)} usuarios importados de:\n{os.path.basename(path)}")
 
     _MAP_COLS = {
-        "nombre de usuario": "usuario", "nombre usuario": "usuario",
-        "usuario": "usuario", "id de usuario": "id", "id usuario": "id",
-        "impresiones en b/n": "imp_bw", "impresiones b/n": "imp_bw",
+        # Xerox AltaLink español (columnas reales del CSV exportado)
+        "nombre de cuenta":    "usuario",
+        "id de cuenta":        "id",
+        "tipo de cuenta":      "tipo",
+        # Impresiones negro
+        "contador: total de impresiones impresas y copias negro": "imp_bw",
+        "contador: total de impresiones negro":                   "imp_bw",
+        "impresiones en b/n":  "imp_bw", "impresiones b/n": "imp_bw",
+        # Impresiones color
+        "contador: total de impresiones impresas y copias color": "imp_color",
+        "contador: total de impresiones color":                   "imp_color",
         "impresiones en color": "imp_color", "impresiones color": "imp_color",
+        # Copias negro
+        "contador: total de impresiones copiadas en negro": "cop_bw",
         "copias en b/n": "cop_bw", "copias b/n": "cop_bw",
+        # Copias color
+        "contador: total de impresiones copiadas en color": "cop_color",
         "copias en color": "cop_color", "copias color": "cop_color",
+        # Escáner
+        "contador: total de imágenes escaneadas": "scan",
+        "contador: total de escaneados":          "scan",
         "escaneados": "scan", "escáner": "scan", "escaneos": "scan",
         "total": "total",
-        "user name": "usuario", "username": "usuario", "user id": "id",
+        # Inglés
+        "nombre de usuario": "usuario", "nombre usuario": "usuario",
+        "usuario": "usuario", "id de usuario": "id", "id usuario": "id",
+        "user name": "usuario", "username": "usuario", "account name": "usuario",
+        "user id": "id", "account id": "id",
         "black and white prints": "imp_bw", "b&w prints": "imp_bw",
         "color prints": "imp_color",
         "black and white copies": "cop_bw", "b&w copies": "cop_bw",
@@ -1062,7 +1081,8 @@ class DialogContabilidad(ctk.CTkToplevel):
         resultado = []
         for fila in filas_raw:
             row = {norm(k): (v or "").strip() for k, v in fila.items()}
-            if not row.get("usuario"):
+            # Ignorar filas de totales o vacías
+            if not row.get("usuario") or row.get("tipo", "").lower() in ("total", "totales", "system"):
                 continue
             def safe_int(k):
                 try: return int(row.get(k, "0").replace(",","").replace(".","") or 0)
