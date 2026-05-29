@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
-import json, os, asyncio, socket, threading, csv, ipaddress
+import json, os, asyncio, socket, threading, csv, ipaddress, subprocess, sys
 import webbrowser
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1861,6 +1861,8 @@ class App(ctk.CTk):
             self.cfg["xsa_password"] = "1111"
             guardar_json(CONFIG_FILE, self.cfg)
 
+        self._web_proc = self._arrancar_web_server()
+
         self._build_ui()
         self._poblar_tabla()
         self._schedule_autoref()
@@ -1870,6 +1872,20 @@ class App(ctk.CTk):
 
         if not SNMP_OK:
             messagebox.showerror("Error SNMP", f"No se pudo cargar pysnmp:\n{SNMP_ERROR}\n\nEjecuta: pip install pysnmp")
+
+    # ── WEB SERVER ────────────────────────────────────────────────────────────
+    def _arrancar_web_server(self):
+        """Arranca web_server.py como subproceso oculto sin ventana de consola."""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_server.py")
+        if not os.path.exists(script):
+            return None
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            return subprocess.Popen([sys.executable, script], **kwargs)
+        except Exception:
+            return None
 
     # ── SYSTEM TRAY ───────────────────────────────────────────────────────────
     def _setup_tray(self):
@@ -1918,6 +1934,8 @@ class App(ctk.CTk):
         """Salir de verdad desde el menú de bandeja."""
         if TRAY_OK and hasattr(self, "_tray_icon"):
             self._tray_icon.stop()
+        if hasattr(self, "_web_proc") and self._web_proc and self._web_proc.poll() is None:
+            self._web_proc.terminate()
         self.after(0, self.destroy)
 
     # ── BUILD UI ──────────────────────────────────────────────────────────────

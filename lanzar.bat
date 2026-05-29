@@ -1,5 +1,5 @@
 @echo off
-title Fleet Monitor Pro
+title Fleet Monitor Pro - Instalando...
 cd /d "%~dp0"
 
 python --version >nul 2>&1
@@ -18,14 +18,5 @@ call venv\Scripts\activate.bat
 echo Comprobando dependencias...
 pip install -q -r requirements.txt
 
-echo.
-echo  Arrancando servidor web en http://localhost:5050 ...
-start "Fleet Monitor - Web" /min cmd /c "call venv\Scripts\activate.bat && python web_server.py"
-
-echo  Arrancando aplicacion de escritorio...
-set PYTHONWARNINGS=ignore::RuntimeWarning
-python xerox_monitor.py
-
-echo.
-echo  Cerrando servidor web...
-taskkill /fi "WindowTitle eq Fleet Monitor - Web*" /f >nul 2>&1
+echo Arrancando Fleet Monitor Pro...
+start "" venv\Scripts\pythonw.exe xerox_monitor.py
