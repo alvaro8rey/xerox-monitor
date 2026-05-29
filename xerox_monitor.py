@@ -2,8 +2,16 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 import json, os, asyncio, socket, threading, csv, ipaddress
+import webbrowser
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+PIL_OK = False
+try:
+    from PIL import Image as PILImage, ImageTk
+    PIL_OK = True
+except ImportError:
+    pass
 
 _historial_lock = threading.Lock()
 
@@ -113,9 +121,9 @@ def cargar_impresoras():
     out = []
     for item in raw:
         if isinstance(item, str):
-            out.append({"ip": item, "nombre": item, "ubicacion": "", "comunidad": ""})
+            out.append({"ip": item, "nombre": item, "ubicacion": "", "comunidad": "", "imagen": ""})
         else:
-            out.append(item)
+            out.append({**item, "imagen": item.get("imagen", "")})
     return out
 
 def guardar_historial(ip, consumibles):
@@ -560,8 +568,8 @@ class DialogImpresora(ctk.CTkToplevel):
         self.cfg = cfg
         self.resultado = None
         self.title("Añadir dispositivo" if not imp else "Editar dispositivo")
-        self.geometry("420x480")
-        self.minsize(380, 440)
+        self.geometry("420x560")
+        self.minsize(380, 520)
         self.resizable(True, True)
         self.configure(fg_color=BG2)
         self.grab_set()
@@ -611,6 +619,32 @@ class DialogImpresora(ctk.CTkToplevel):
         self.com.pack(**pad)
         if imp: self.com.insert(0, imp.get("comunidad", ""))
 
+        ctk.CTkLabel(scroll, text="Imagen del dispositivo (opcional)", text_color=TEXT2, font=("Segoe UI", 11)).pack(anchor="w", **pad)
+        img_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        img_row.pack(fill="x", **pad)
+        self.img_path = ctk.CTkEntry(img_row, placeholder_text="Ruta a la imagen...", width=280,
+                                      fg_color=BG3, border_color=BORDER, text_color=TEXT,
+                                      state="readonly")
+        self.img_path.pack(side="left")
+        ctk.CTkButton(img_row, text="Examinar...", width=80, height=28,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 11), command=self._examinar_imagen).pack(side="left", padx=(6, 0))
+        if imp and imp.get("imagen"):
+            self.img_path.configure(state="normal")
+            self.img_path.insert(0, imp.get("imagen", ""))
+            self.img_path.configure(state="readonly")
+
+    def _examinar_imagen(self):
+        from tkinter.filedialog import askopenfilename
+        path = askopenfilename(
+            title="Seleccionar imagen",
+            filetypes=[("Imágenes", "*.png *.jpg *.jpeg *.bmp"), ("Todos", "*.*")])
+        if path:
+            self.img_path.configure(state="normal")
+            self.img_path.delete(0, "end")
+            self.img_path.insert(0, path)
+            self.img_path.configure(state="readonly")
+
     def _guardar(self):
         ip = self.ip.get().strip()
         if not ip:
@@ -625,7 +659,8 @@ class DialogImpresora(ctk.CTkToplevel):
         self.resultado = {
             "ip": ip, "nombre": nombre,
             "ubicacion": self.ubic.get().strip(),
-            "comunidad": self.com.get().strip()
+            "comunidad": self.com.get().strip(),
+            "imagen": self.img_path.get().strip()
         }
         self.destroy()
 
@@ -745,30 +780,51 @@ class App(ctk.CTk):
 
     # ── BUILD UI ──────────────────────────────────────────────────────────────
     def _build_ui(self):
-        # ── Toolbar ──
-        tb = ctk.CTkFrame(self, fg_color=BG2, height=50, corner_radius=0)
+        # ── Menubar nativo ──
+        menubar = tk.Menu(self, bg=BG2, fg=TEXT, activebackground=ACCENT,
+                          activeforeground=TEXT, tearoff=False)
+
+        m_disp = tk.Menu(menubar, tearoff=False, bg=BG2, fg=TEXT,
+                         activebackground=ACCENT, activeforeground=TEXT)
+        m_disp.add_command(label="Añadir manualmente", command=self._añadir)
+        m_disp.add_command(label="Escanear red...", command=self._escanear_red)
+        m_disp.add_separator()
+        m_disp.add_command(label="Editar", command=self._editar)
+        m_disp.add_command(label="Eliminar", command=self._eliminar)
+        menubar.add_cascade(label="Dispositivos", menu=m_disp)
+
+        m_tools = tk.Menu(menubar, tearoff=False, bg=BG2, fg=TEXT,
+                          activebackground=ACCENT, activeforeground=TEXT)
+        m_tools.add_command(label="Exportar...", command=self._exportar_todo)
+        m_tools.add_separator()
+        m_tools.add_command(label="Configuración", command=self._abrir_config)
+        menubar.add_cascade(label="Herramientas", menu=m_tools)
+
+        m_help = tk.Menu(menubar, tearoff=False, bg=BG2, fg=TEXT,
+                         activebackground=ACCENT, activeforeground=TEXT)
+        m_help.add_command(label="Acerca de...", command=self._acerca_de)
+        menubar.add_cascade(label="Ayuda", menu=m_help)
+
+        self.configure(menu=menubar)
+
+        # ── Toolbar slim ──
+        tb = ctk.CTkFrame(self, fg_color=BG2, height=48, corner_radius=0)
         tb.pack(fill="x")
         tb.pack_propagate(False)
 
-        ctk.CTkLabel(tb, text="🖨  Fleet Monitor Pro",
+        ctk.CTkLabel(tb, text="🖨 Fleet Monitor Pro",
                      font=("Segoe UI", 14, "bold"), text_color=TEXT).pack(side="left", padx=16)
         self.lbl_ts = ctk.CTkLabel(tb, text="", font=("Segoe UI", 10), text_color=TEXT2)
         self.lbl_ts.pack(side="left", padx=6)
 
-        btn_defs = [
-            ("⚙  Config",    self._abrir_config,   BG3),
-            ("＋  Añadir",   self._añadir,          BG3),
-            ("⊕  Escanear red", self._escanear_red, BG3),
-            ("✎  Editar",   self._editar,          BG3),
-            ("✕  Eliminar", self._eliminar,        BG3),
-            ("↓  Exportar", self._exportar_todo,   BG3),
-            ("↺  Refrescar",self._refrescar_todo,  ACCENT),
-        ]
-        for txt, cmd, color in reversed(btn_defs):
-            ctk.CTkButton(tb, text=txt, width=105, height=30,
-                          fg_color=color, hover_color=BORDER if color!=ACCENT else "#3a7de8",
-                          text_color=TEXT, font=("Segoe UI", 11),
-                          command=cmd).pack(side="right", padx=3, pady=9)
+        ctk.CTkButton(tb, text="↺  Refrescar", width=110, height=32,
+                      fg_color=ACCENT, hover_color="#3a7de8",
+                      text_color=TEXT, font=("Segoe UI", 11, "bold"),
+                      command=self._refrescar_todo).pack(side="right", padx=12, pady=8)
+
+    def _acerca_de(self):
+        messagebox.showinfo("Acerca de Fleet Monitor Pro",
+                            "Fleet Monitor Pro\nVersión 1.0\n\nMonitorización de consumibles de impresoras vía SNMP.")
 
         # ── KPI bar ──
         kpi_bar = ctk.CTkFrame(self, fg_color=BG2, height=56, corner_radius=0)
@@ -887,41 +943,90 @@ class App(ctk.CTk):
         ts    = cache.get("ts")
         estado= cache.get("estado","offline")
 
-        col_e = {OFFLINE: "offline", OK: "ok", WARN: "alerta", CRIT: "critico"}
         color_map  = {"ok":OK,"alerta":WARN,"critico":CRIT,"offline":OFFLINE}
         label_map  = {"ok":"OK","alerta":"Alerta","critico":"Crítico","offline":"Offline"}
         color = color_map.get(estado, OFFLINE)
         label = label_map.get(estado, "—")
 
-        # Header
+        # ── A) Imagen del dispositivo ──
+        img_frame = ctk.CTkFrame(self.panel, fg_color=BG3, corner_radius=6,
+                                  width=280, height=110)
+        img_frame.pack(fill="x", padx=10, pady=(10, 4))
+        img_frame.pack_propagate(False)
+
+        imagen_path = imp.get("imagen", "")
+        imagen_cargada = False
+        if PIL_OK and imagen_path and os.path.isfile(imagen_path):
+            try:
+                pil_img = PILImage.open(imagen_path)
+                pil_img.thumbnail((260, 100), PILImage.LANCZOS)
+                ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img,
+                                        size=(pil_img.width, pil_img.height))
+                lbl_img = ctk.CTkLabel(img_frame, image=ctk_img, text="")
+                lbl_img.pack(expand=True)
+                imagen_cargada = True
+            except Exception:
+                pass
+
+        if not imagen_cargada:
+            ctk.CTkLabel(img_frame, text="🖨", font=("Segoe UI", 36),
+                         text_color=TEXT2).pack(expand=True, pady=(10, 0))
+            info_cache = cache.get("info", {})
+            modelo_short = (info_cache.get("modelo") or imp.get("nombre", ""))[:30]
+            ctk.CTkLabel(img_frame, text=modelo_short, font=("Segoe UI", 9),
+                         text_color=TEXT2).pack(pady=(0, 8))
+
+        # ── B) Header: nombre + badge estado + IP ──
         hdr = ctk.CTkFrame(self.panel, fg_color=BG3, corner_radius=6)
-        hdr.pack(fill="x", padx=10, pady=(10,4))
+        hdr.pack(fill="x", padx=10, pady=(4, 4))
         top = ctk.CTkFrame(hdr, fg_color="transparent")
-        top.pack(fill="x", padx=10, pady=(8,2))
+        top.pack(fill="x", padx=10, pady=(8, 2))
         ctk.CTkLabel(top, text=imp["nombre"], font=("Segoe UI", 12, "bold"),
-                     text_color=TEXT, wraplength=220, justify="left").pack(side="left", anchor="w")
+                     text_color=TEXT, wraplength=200, justify="left").pack(side="left", anchor="w")
         ctk.CTkLabel(top, text=f"● {label}", font=("Segoe UI", 10, "bold"),
                      text_color=color).pack(side="right")
-        ctk.CTkLabel(hdr, text=ip, font=("Consolas", 10), text_color=TEXT2).pack(anchor="w", padx=10, pady=(0,8))
+        ctk.CTkLabel(hdr, text=ip, font=("Consolas", 10), text_color=TEXT2).pack(anchor="w", padx=10, pady=(0, 8))
 
-        # Info rows
+        # ── C) Botones de acción rápida ──
+        acc = ctk.CTkFrame(self.panel, fg_color="transparent")
+        acc.pack(fill="x", padx=10, pady=(2, 4))
+        ctk.CTkButton(acc, text="🌐 Web", width=80, height=28,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 10),
+                      command=lambda: webbrowser.open(f"http://{ip}")).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(acc, text="↺ Refrescar", width=90, height=28,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 10),
+                      command=self._refrescar_sel).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(acc, text="↓ CSV", width=80, height=28,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 10),
+                      command=lambda: self._exportar_csv(ip)).pack(side="left")
+
+        # Info rows helper
         def fila(lbl, val):
             f = ctk.CTkFrame(self.panel, fg_color="transparent")
             f.pack(fill="x", padx=14, pady=1)
             ctk.CTkLabel(f, text=lbl, font=("Segoe UI", 10), text_color=TEXT2, width=75, anchor="w").pack(side="left")
-            ctk.CTkLabel(f, text=val, font=("Segoe UI", 10, "bold"), text_color=TEXT, anchor="w", wraplength=180).pack(side="left")
+            ctk.CTkLabel(f, text=val, font=("Segoe UI", 10, "bold"), text_color=TEXT, anchor="w", wraplength=175).pack(side="left")
 
+        def sep_line():
+            ctk.CTkFrame(self.panel, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x", padx=10, pady=(6, 2))
+
+        # ── D) Sección INFORMACIÓN ──
+        sep_line()
         ctk.CTkLabel(self.panel, text="INFORMACIÓN", font=("Segoe UI", 8, "bold"),
-                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(10,2))
-        fila("Ubicación:", imp.get("ubicacion","") or "—")
-        fila("Comunidad:", imp.get("comunidad","") or self.cfg["comunidad_snmp"])
+                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
+        fila("Ubicación:", imp.get("ubicacion", "") or "—")
+        fila("Comunidad:", imp.get("comunidad", "") or self.cfg["comunidad_snmp"])
         fila("Lectura:",   ts.strftime("%H:%M:%S") if ts else "—")
 
-        # Info extra SNMP
+        # ── E) Sección DISPOSITIVO ──
         info = cache.get("info", {})
         if info:
+            sep_line()
             ctk.CTkLabel(self.panel, text="DISPOSITIVO", font=("Segoe UI", 8, "bold"),
-                         text_color=TEXT2).pack(anchor="w", padx=14, pady=(10,2))
+                         text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
             if info.get("modelo"):
                 fila("Modelo:", info["modelo"][:35])
             if info.get("sys_nombre"):
@@ -929,7 +1034,7 @@ class App(ctk.CTk):
             if info.get("serial"):
                 fila("Serie:", info["serial"][:25])
             if info.get("paginas"):
-                try:   pag_fmt = f"{int(info['paginas']):,}".replace(",",".")
+                try:   pag_fmt = f"{int(info['paginas']):,}".replace(",", ".")
                 except: pag_fmt = info["paginas"]
                 fila("Páginas:", pag_fmt)
             if info.get("estado_imp"):
@@ -944,12 +1049,13 @@ class App(ctk.CTk):
             if info.get("sys_uptime"):
                 fila("Uptime:", info["sys_uptime"][:30])
 
-        # Consumibles
+        # ── F) Sección CONSUMIBLES con barras ──
+        sep_line()
         ctk.CTkLabel(self.panel, text="CONSUMIBLES", font=("Segoe UI", 8, "bold"),
-                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(12,2))
+                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
 
-        scroll = ctk.CTkScrollableFrame(self.panel, fg_color="transparent", height=340)
-        scroll.pack(fill="both", expand=True, padx=8, pady=(0,4))
+        scroll = ctk.CTkScrollableFrame(self.panel, fg_color="transparent", height=260)
+        scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
         if error:
             ctk.CTkLabel(scroll, text=f"⚠  {error}", font=("Segoe UI", 10),
@@ -959,9 +1065,9 @@ class App(ctk.CTk):
                 pct = c["porcentaje"]
                 bc  = CRIT if pct<=self.cfg["umbral_critico"] else WARN if pct<=self.cfg["umbral_alerta"] else OK
                 ctk.CTkLabel(scroll, text=c["componente"], font=("Segoe UI", 10),
-                             text_color=TEXT, anchor="w").pack(fill="x", pady=(6,0))
+                             text_color=TEXT, anchor="w").pack(fill="x", pady=(6, 0))
                 bar_bg = ctk.CTkFrame(scroll, fg_color=BG3, height=10, corner_radius=5)
-                bar_bg.pack(fill="x", pady=(2,0))
+                bar_bg.pack(fill="x", pady=(2, 0))
                 bar_bg.pack_propagate(False)
                 if pct > 0:
                     ctk.CTkFrame(bar_bg, fg_color=bc, height=10, corner_radius=5,
@@ -973,15 +1079,6 @@ class App(ctk.CTk):
         else:
             ctk.CTkLabel(scroll, text="Sin datos disponibles", text_color=TEXT2,
                          font=("Segoe UI", 10)).pack(anchor="w", pady=6)
-
-        # Botones panel
-        bp = ctk.CTkFrame(self.panel, fg_color="transparent")
-        bp.pack(fill="x", padx=10, pady=6)
-        ctk.CTkButton(bp, text="↺  Refrescar", height=28, fg_color=ACCENT,
-                      font=("Segoe UI", 11), command=self._refrescar_sel).pack(fill="x", pady=2)
-        ctk.CTkButton(bp, text="↓  Exportar CSV", height=28, fg_color=BG3,
-                      text_color=TEXT, font=("Segoe UI", 11),
-                      command=lambda: self._exportar_csv(ip)).pack(fill="x", pady=2)
 
     # ── TABLA ─────────────────────────────────────────────────────────────────
     def _poblar_tabla(self):
