@@ -919,8 +919,8 @@ class DialogDetalles(ctk.CTkToplevel):
         self._comunidad = comunidad
         self._timeout = timeout
         self.title(f"Detalles del dispositivo")
-        self.geometry("660x540")
-        self.minsize(560, 420)
+        self.geometry("780x560")
+        self.minsize(640, 440)
         self.configure(fg_color=BG2)
         self.resizable(True, True)
         self.grab_set(); self.lift(); self.focus_force()
@@ -2741,18 +2741,23 @@ class App(ctk.CTk):
         # ── C) Botones de acción rápida ──
         acc = ctk.CTkFrame(sc, fg_color="transparent")
         acc.pack(fill="x", padx=10, pady=(2, 4))
-        ctk.CTkButton(acc, text="🌐 Web", width=76, height=28,
+        for col in range(3):
+            acc.columnconfigure(col, weight=1)
+        ctk.CTkButton(acc, text="🌐 Web", height=30,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
                       font=("Segoe UI", 10),
-                      command=lambda: webbrowser.open(f"http://{ip}")).pack(side="left", padx=(0, 3))
-        ctk.CTkButton(acc, text="↺ Refrescar", width=86, height=28,
+                      command=lambda: webbrowser.open(f"http://{ip}")).grid(
+                          row=0, column=0, sticky="ew", padx=(0,2))
+        ctk.CTkButton(acc, text="↺ Refrescar", height=30,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
-                      command=self._refrescar_sel).pack(side="left", padx=(0, 3))
-        ctk.CTkButton(acc, text="↓ CSV", width=60, height=28,
+                      command=self._refrescar_sel).grid(
+                          row=0, column=1, sticky="ew", padx=2)
+        ctk.CTkButton(acc, text="↓ CSV", height=30,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
-                      command=lambda: self._exportar_csv(ip)).pack(side="left")
+                      command=lambda: self._exportar_csv(ip)).grid(
+                          row=0, column=2, sticky="ew", padx=(2,0))
 
         # Botón Detalles (fila separada, ancho completo)
         _imp_det = next((i for i in self.impresoras if i["ip"]==ip), {})
