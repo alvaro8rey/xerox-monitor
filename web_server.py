@@ -134,6 +134,7 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#1a1d2e;color:#e8eaf0;font-family:'Segoe UI',sans-serif;font-size:14px}
+body.locked header,body.locked nav,body.locked section{visibility:hidden}
 a{color:inherit;text-decoration:none}
 
 /* HEADER */
@@ -213,7 +214,7 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
-<body>
+<body class="locked">
 
 <!-- PIN MODAL — bloquea toda la página hasta autenticarse -->
 <div class="pin-overlay show" id="pin-overlay">
@@ -293,6 +294,7 @@ function pinKey(k) {
     if (_pinBuffer === PIN_CORRECT) {
       _pinUnlocked = true;
       document.getElementById('pin-overlay').classList.remove('show');
+      document.body.classList.remove('locked');
       loadImpresoras();
       loadContabilidad();
     } else {
