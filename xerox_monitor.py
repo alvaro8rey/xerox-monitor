@@ -845,29 +845,48 @@ def _xsa_descargar_csv(ip, password, usuario="admin", timeout=12):
     except Exception as e:
         return None, str(e)
 
+_MESES_ES = {
+    "01": "Enero", "02": "Febrero", "03": "Marzo", "04": "Abril",
+    "05": "Mayo", "06": "Junio", "07": "Julio", "08": "Agosto",
+    "09": "Septiembre", "10": "Octubre", "11": "Noviembre", "12": "Diciembre",
+}
+
+def _mes_label(mes_key):
+    """Convierte '2026-05' → 'Mayo 2026'."""
+    try:
+        y, m = mes_key.split("-")
+        return f"{_MESES_ES.get(m, m)} {y}"
+    except Exception:
+        return mes_key
+
+
 class DialogContabilidad(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Contabilidad por usuario")
-        self.geometry("900x620")
-        self.minsize(700, 480)
+        self.geometry("1100x680")
+        self.minsize(800, 520)
         self.configure(fg_color=BG2)
         self.grab_set()
         self.lift()
         self.focus_force()
 
-        self._datos = cargar_json(CONTABILIDAD_FILE, {})  # {ip: {usuario: {cols}}}
+        self._datos = cargar_json(CONTABILIDAD_FILE, {})
+        self._sel_impresora = "Todas"
+        self._sel_mes = "Acumulado"
+        self._sel_vista = "Acumulado"
+        self._sort_col = None
+        self._sort_rev = False
         self._build()
 
     def _build(self):
-        # ── Toolbar del diálogo ──
+        # ── Toolbar ──
         tb = ctk.CTkFrame(self, fg_color=BG3, height=44, corner_radius=0)
         tb.pack(fill="x")
         tb.pack_propagate(False)
 
         ctk.CTkLabel(tb, text="Contabilidad por usuario — Xerox Standard Accounting",
                      font=("Segoe UI", 12, "bold"), text_color=TEXT).pack(side="left", padx=14)
-
         ctk.CTkButton(tb, text="🗑  Limpiar", width=90, height=30,
                       fg_color=BG2, hover_color=BORDER, text_color=TEXT2,
                       font=("Segoe UI", 11),
@@ -881,14 +900,53 @@ class DialogContabilidad(ctk.CTkToplevel):
                       font=("Segoe UI", 11, "bold"),
                       command=self._descargar_auto).pack(side="right", padx=4, pady=7)
 
-        self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
-        self.lbl_info.pack(anchor="w", padx=14, pady=(6, 2))
+        # ── Fila 1: Impresora ──
+        row1 = ctk.CTkFrame(self, fg_color=BG2, height=38)
+        row1.pack(fill="x", padx=10, pady=(6, 0))
+        row1.pack_propagate(False)
+        ctk.CTkLabel(row1, text="Impresora:", text_color=TEXT2,
+                     font=("Segoe UI", 11)).pack(side="left", padx=(4, 6))
+        self._imp_seg = ctk.CTkSegmentedButton(
+            row1, values=self._imp_values(),
+            command=self._on_imp_change,
+            font=("Segoe UI", 10),
+            fg_color=BG3, selected_color=ACCENT, selected_hover_color="#3a7de8",
+            unselected_color=BG3, unselected_hover_color=BORDER, text_color=TEXT)
+        self._imp_seg.set("Todas")
+        self._imp_seg.pack(side="left", padx=4)
+
+        # ── Fila 2: Mes + Vista ──
+        row2 = ctk.CTkFrame(self, fg_color=BG2, height=38)
+        row2.pack(fill="x", padx=10, pady=(4, 2))
+        row2.pack_propagate(False)
+        ctk.CTkLabel(row2, text="Mes:", text_color=TEXT2,
+                     font=("Segoe UI", 11)).pack(side="left", padx=(4, 6))
+        self._mes_combo = ctk.CTkComboBox(
+            row2, values=self._mes_values(),
+            command=self._on_mes_change,
+            width=160, height=28, fg_color=BG3, border_color=BORDER,
+            button_color=ACCENT, button_hover_color="#3a7de8",
+            dropdown_fg_color=BG3, text_color=TEXT, font=("Segoe UI", 10))
+        mes_vals = self._mes_values()
+        self._mes_combo.set(mes_vals[0] if mes_vals else "Acumulado")
+        self._sel_mes = mes_vals[0] if mes_vals else "Acumulado"
+        self._mes_combo.pack(side="left", padx=4)
+
+        ctk.CTkLabel(row2, text="Vista:", text_color=TEXT2,
+                     font=("Segoe UI", 11)).pack(side="left", padx=(16, 6))
+        self._vista_seg = ctk.CTkSegmentedButton(
+            row2, values=["Mensual", "Acumulado"],
+            command=self._on_vista_change,
+            font=("Segoe UI", 10),
+            fg_color=BG3, selected_color=ACCENT, selected_hover_color="#3a7de8",
+            unselected_color=BG3, unselected_hover_color=BORDER, text_color=TEXT)
+        self._vista_seg.set("Acumulado")
+        self._vista_seg.pack(side="left", padx=4)
 
         # ── Tabla ──
         tbl_frame = ctk.CTkFrame(self, fg_color=BG2, corner_radius=0)
-        tbl_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        tbl_frame.pack(fill="both", expand=True, padx=8, pady=(4, 0))
 
-        style = ttk.Style()
         cols = ("impresora", "usuario", "imp_bw", "imp_color",
                 "cop_bw", "cop_color", "scan", "total")
         self.tree = ttk.Treeview(tbl_frame, columns=cols,
@@ -903,9 +961,9 @@ class DialogContabilidad(ctk.CTkToplevel):
             ("scan",      "Escaneos",        80, False),
             ("total",     "Total páginas",  100, False),
         ]:
-            self.tree.heading(col, text=hdr,
-                              command=lambda c=col: self._sort(c))
-            self.tree.column(col, width=w, anchor="center" if col not in ("impresora","usuario") else "w",
+            self.tree.heading(col, text=hdr, command=lambda c=col: self._sort(c))
+            self.tree.column(col, width=w,
+                             anchor="center" if col not in ("impresora", "usuario") else "w",
                              stretch=stretch)
 
         vsb = ttk.Scrollbar(tbl_frame, orient="vertical", command=self.tree.yview)
@@ -913,13 +971,77 @@ class DialogContabilidad(ctk.CTkToplevel):
         vsb.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True)
 
-        self.tree.tag_configure("par",    background=BG2,     foreground=TEXT)
-        self.tree.tag_configure("impar",  background=ROW_ALT, foreground=TEXT)
-        self.tree.tag_configure("top",    background="#1a2e1a", foreground=OK)
+        self.tree.tag_configure("par",     background=BG2,      foreground=TEXT)
+        self.tree.tag_configure("impar",   background=ROW_ALT,  foreground=TEXT)
+        self.tree.tag_configure("top",     background="#1a2e1a", foreground=OK)
+        self.tree.tag_configure("totales", background=BG3,      foreground=ACCENT)
 
-        self._sort_col = None
-        self._sort_rev = False
+        # ── Status bar ──
+        self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
+        self.lbl_info.pack(anchor="w", padx=14, pady=(2, 6))
+
         self._poblar()
+
+    # ── helpers for filter controls ──────────────────────────────────────────
+    def _imp_values(self):
+        vals = ["Todas"]
+        for ip, bloque in self._datos.items():
+            nombre = bloque.get("nombre_impresora", ip)
+            vals.append(nombre)
+        return vals
+
+    def _mes_values(self):
+        """Return month list most-recent first, with 'Acumulado' at top."""
+        meses = set()
+        ip_filter = self._sel_impresora
+        for ip, bloque in self._datos.items():
+            nombre = bloque.get("nombre_impresora", ip)
+            if ip_filter != "Todas" and nombre != ip_filter:
+                continue
+            for mk in bloque.get("snapshots", {}).keys():
+                meses.add(mk)
+        sorted_meses = sorted(meses, reverse=True)
+        return ["Acumulado"] + [_mes_label(mk) for mk in sorted_meses]
+
+    def _mes_key_from_label(self, label):
+        """Reverse _mes_label: 'Mayo 2026' → '2026-05'. Returns None for 'Acumulado'."""
+        if label == "Acumulado":
+            return None
+        meses_inv = {v: k for k, v in _MESES_ES.items()}
+        parts = label.rsplit(" ", 1)
+        if len(parts) == 2:
+            nombre_mes, anio = parts
+            m = meses_inv.get(nombre_mes)
+            if m:
+                return f"{anio}-{m}"
+        return None
+
+    def _on_imp_change(self, value):
+        self._sel_impresora = value
+        # Refresh mes combo
+        new_mes_vals = self._mes_values()
+        self._mes_combo.configure(values=new_mes_vals)
+        if self._sel_mes not in new_mes_vals:
+            self._sel_mes = new_mes_vals[0] if new_mes_vals else "Acumulado"
+            self._mes_combo.set(self._sel_mes)
+        self._update_imp_col_visibility()
+        self._poblar()
+
+    def _on_mes_change(self, value):
+        self._sel_mes = value
+        self._poblar()
+
+    def _on_vista_change(self, value):
+        self._sel_vista = value
+        self._poblar()
+
+    def _update_imp_col_visibility(self):
+        if self._sel_impresora == "Todas":
+            self.tree.column("impresora", width=160, stretch=True)
+            self.tree.heading("impresora", text="Impresora")
+        else:
+            self.tree.column("impresora", width=0, stretch=False, minwidth=0)
+            self.tree.heading("impresora", text="")
 
     def _descargar_auto(self):
         if not REQUESTS_OK:
@@ -941,7 +1063,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         if not dlg.resultado:
             return
 
-        seleccionadas = dlg.resultado   # lista de {ip, nombre, password, usuario}
+        seleccionadas = dlg.resultado
         self.lbl_info.configure(text="⏳  Descargando informes...", text_color=WARN)
         self.update()
 
@@ -955,11 +1077,16 @@ class DialogContabilidad(ctk.CTkToplevel):
                     errores.append(f"{imp['nombre']}: {err}")
                     continue
                 try:
-                    import io
                     filas = self._parsear_csv_texto(csv_txt)
                     if filas:
-                        self._datos[imp["ip"]] = {
-                            "nombre_impresora": f"{imp['nombre']} ({imp['ip']})",
+                        mes_key = datetime.now().strftime("%Y-%m")
+                        if imp["ip"] not in self._datos:
+                            self._datos[imp["ip"]] = {
+                                "nombre_impresora": f"{imp['nombre']} ({imp['ip']})",
+                                "snapshots": {}
+                            }
+                        self._datos[imp["ip"]]["nombre_impresora"] = f"{imp['nombre']} ({imp['ip']})"
+                        self._datos[imp["ip"]]["snapshots"][mes_key] = {
                             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "usuarios": filas,
                         }
@@ -970,7 +1097,9 @@ class DialogContabilidad(ctk.CTkToplevel):
                     errores.append(f"{imp['nombre']}: {e}")
 
             guardar_json(CONTABILIDAD_FILE, self._datos)
+
             def done():
+                self._refresh_controls()
                 self._poblar()
                 if errores:
                     messagebox.showwarning("Descarga parcial",
@@ -981,6 +1110,18 @@ class DialogContabilidad(ctk.CTkToplevel):
             self.after(0, done)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_controls(self):
+        """Rebuild the impresora segmented button and mes combo after data changes."""
+        self._imp_seg.configure(values=self._imp_values())
+        if self._sel_impresora not in self._imp_values():
+            self._sel_impresora = "Todas"
+            self._imp_seg.set("Todas")
+        new_mes_vals = self._mes_values()
+        self._mes_combo.configure(values=new_mes_vals)
+        if self._sel_mes not in new_mes_vals:
+            self._sel_mes = new_mes_vals[0] if new_mes_vals else "Acumulado"
+            self._mes_combo.set(self._sel_mes)
 
     def _parsear_csv_texto(self, texto):
         import io
@@ -1002,7 +1143,6 @@ class DialogContabilidad(ctk.CTkToplevel):
         if not path:
             return
 
-        # Pedir a qué impresora pertenece este CSV
         ips = []
         try:
             parent_app = self.master
@@ -1014,8 +1154,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         self.wait_window(dlg)
         if not dlg.resultado:
             return
-        ip_label = dlg.resultado  # "Nombre (IP)" o IP directa
-        # Extraer IP
+        ip_label = dlg.resultado
         import re
         m = re.search(r'\(([^)]+)\)', ip_label)
         ip_key = m.group(1) if m else ip_label
@@ -1030,12 +1169,16 @@ class DialogContabilidad(ctk.CTkToplevel):
             messagebox.showwarning("CSV vacío", "No se encontraron datos de usuario en el archivo.")
             return
 
-        self._datos[ip_key] = {
-            "nombre_impresora": ip_label,
+        mes_key = datetime.now().strftime("%Y-%m")
+        if ip_key not in self._datos:
+            self._datos[ip_key] = {"nombre_impresora": ip_label, "snapshots": {}}
+        self._datos[ip_key]["nombre_impresora"] = ip_label
+        self._datos[ip_key]["snapshots"][mes_key] = {
             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "usuarios": filas
+            "usuarios": filas,
         }
         guardar_json(CONTABILIDAD_FILE, self._datos)
+        self._refresh_controls()
         self._poblar()
         messagebox.showinfo("Importado", f"✔  {len(filas)} usuarios importados de:\n{os.path.basename(path)}")
 
@@ -1110,36 +1253,119 @@ class DialogContabilidad(ctk.CTkToplevel):
             self.tree.delete(row)
 
         if not self._datos:
-            self.lbl_info.configure(text="Sin datos. Usa Herramientas → Contabilidad por usuario → Importar CSV.")
+            self.lbl_info.configure(
+                text="Sin datos. Usa Herramientas → Contabilidad por usuario → Importar CSV.",
+                text_color=TEXT2)
             return
 
-        total_filas = 0
-        alt = False
+        # Determine which IPs to show
+        ip_filter = self._sel_impresora
+        mes_label_sel = self._sel_mes
+        mes_key_sel = self._mes_key_from_label(mes_label_sel)  # None = Acumulado
+        vista = self._sel_vista
+
+        # Build rows
+        all_rows = []  # list of (nombre_imp, usuario, imp_bw, imp_color, cop_bw, cop_color, scan, total, nota)
+        ts_mostrar = []
+
         for ip_key, bloque in self._datos.items():
             nombre_imp = bloque.get("nombre_impresora", ip_key)
-            ts         = bloque.get("ts", "")
-            usuarios   = bloque.get("usuarios", [])
-            for i, u in enumerate(usuarios):
-                tag = "top" if i == 0 else ("par" if alt else "impar")
-                alt = not alt
-                self.tree.insert("", "end", values=(
-                    nombre_imp,
-                    u["usuario"],
-                    u["imp_bw"]    or "—",
-                    u["imp_color"] or "—",
-                    u["cop_bw"]    or "—",
-                    u["cop_color"] or "—",
-                    u["scan"]      or "—",
-                    u["total"]     or "—",
-                ), tags=(tag,))
-                total_filas += 1
+            if ip_filter != "Todas" and nombre_imp != ip_filter:
+                continue
 
-        ts_all = ", ".join(
-            f"{b.get('nombre_impresora', k)}: {b.get('ts','?')}"
-            for k, b in self._datos.items()
-        )
+            snapshots = bloque.get("snapshots", {})
+
+            # Determine current snapshot key
+            if mes_key_sel is not None:
+                cur_key = mes_key_sel
+            else:
+                # Acumulado: use latest snapshot
+                sorted_keys = sorted(snapshots.keys(), reverse=True)
+                cur_key = sorted_keys[0] if sorted_keys else None
+
+            if cur_key is None or cur_key not in snapshots:
+                continue
+
+            cur_snap = snapshots[cur_key]
+            cur_usuarios = {u["usuario"]: u for u in cur_snap.get("usuarios", [])}
+            ts_mostrar.append(f"{nombre_imp}: {cur_snap.get('ts','?')}")
+
+            if vista == "Mensual" and mes_key_sel is not None:
+                # Find previous month snapshot
+                sorted_keys = sorted(snapshots.keys())
+                idx = sorted_keys.index(cur_key) if cur_key in sorted_keys else -1
+                prev_key = sorted_keys[idx - 1] if idx > 0 else None
+                prev_usuarios = {}
+                if prev_key:
+                    prev_usuarios = {u["usuario"]: u for u in snapshots[prev_key].get("usuarios", [])}
+
+                for uname, u in cur_usuarios.items():
+                    if uname in prev_usuarios:
+                        pu = prev_usuarios[uname]
+                        imp_bw    = max(0, u["imp_bw"]    - pu["imp_bw"])
+                        imp_color = max(0, u["imp_color"] - pu["imp_color"])
+                        cop_bw    = max(0, u["cop_bw"]    - pu["cop_bw"])
+                        cop_color = max(0, u["cop_color"] - pu["cop_color"])
+                        scan      = max(0, u["scan"]      - pu["scan"])
+                    else:
+                        imp_bw    = u["imp_bw"]
+                        imp_color = u["imp_color"]
+                        cop_bw    = u["cop_bw"]
+                        cop_color = u["cop_color"]
+                        scan      = u["scan"]
+                    total = imp_bw + imp_color + cop_bw + cop_color
+                    nota = "" if prev_key else " (sin mes anterior)"
+                    all_rows.append((nombre_imp, uname + nota, imp_bw, imp_color,
+                                     cop_bw, cop_color, scan, total))
+            else:
+                # Acumulado or Mensual without previous: show latest values
+                for u in cur_snap.get("usuarios", []):
+                    all_rows.append((nombre_imp, u["usuario"], u["imp_bw"], u["imp_color"],
+                                     u["cop_bw"], u["cop_color"], u["scan"], u["total"]))
+
+        # Sort by total descending
+        all_rows.sort(key=lambda r: r[7], reverse=True)
+
+        # Totals
+        tot_imp_bw    = sum(r[2] for r in all_rows)
+        tot_imp_color = sum(r[3] for r in all_rows)
+        tot_cop_bw    = sum(r[4] for r in all_rows)
+        tot_cop_color = sum(r[5] for r in all_rows)
+        tot_scan      = sum(r[6] for r in all_rows)
+        tot_total     = sum(r[7] for r in all_rows)
+
+        show_imp_col = (ip_filter == "Todas")
+        self._update_imp_col_visibility()
+
+        alt = False
+        for i, r in enumerate(all_rows):
+            tag = "par" if alt else "impar"
+            alt = not alt
+            imp_col_val = r[0] if show_imp_col else ""
+            self.tree.insert("", "end", values=(
+                imp_col_val, r[1],
+                r[2] if r[2] else "—",
+                r[3] if r[3] else "—",
+                r[4] if r[4] else "—",
+                r[5] if r[5] else "—",
+                r[6] if r[6] else "—",
+                r[7] if r[7] else "—",
+            ), tags=(tag,))
+
+        # Totals row
+        if all_rows:
+            self.tree.insert("", "end", values=(
+                "" if not show_imp_col else "TOTAL",
+                "TOTAL" if not show_imp_col else "",
+                tot_imp_bw or "—", tot_imp_color or "—",
+                tot_cop_bw or "—", tot_cop_color or "—",
+                tot_scan or "—", tot_total or "—",
+            ), tags=("totales",))
+
+        ts_str = "  |  ".join(ts_mostrar) if ts_mostrar else "Sin snapshots"
         self.lbl_info.configure(
-            text=f"{total_filas} usuarios cargados  |  Última importación: {ts_all}")
+            text=f"{len(all_rows)} usuarios  |  {ts_str}",
+            text_color=TEXT2)
 
     def _limpiar(self):
         if messagebox.askyesno("Limpiar", "¿Eliminar todos los datos de contabilidad cargados?"):
