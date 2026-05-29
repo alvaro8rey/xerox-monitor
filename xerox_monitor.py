@@ -89,6 +89,7 @@ def _formato_consumibles(cons, umbral_critico, umbral_alerta):
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 DB_FILE        = "impresoras.json"
 HISTORIAL_FILE = "historial.json"
+ALERTAS_FILE   = "alertas.json"
 CONFIG_FILE    = "config.json"
 BASE_OID       = "1.3.6.1.2.1.43.11.1.1"
 DEFAULT_CONFIG = {
@@ -158,6 +159,12 @@ def guardar_historial(ip, consumibles, nombre=None):
         h[ip].append(entry)
         h[ip] = h[ip][-100:]
         guardar_json(HISTORIAL_FILE, h)
+
+def guardar_alertas(ip, alerts):
+    """Persiste las alertas activas de una IP para que la web las pueda leer."""
+    data = cargar_json(ALERTAS_FILE, {})
+    data[ip] = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "alerts": alerts}
+    guardar_json(ALERTAS_FILE, data)
 
 # ── SNMP ──────────────────────────────────────────────────────────────────────
 def limpiar_nombre(n):
@@ -2570,6 +2577,7 @@ class App(ctk.CTk):
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
                 if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
+                guardar_alertas(ip, alerts)
             self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:
@@ -2593,6 +2601,7 @@ class App(ctk.CTk):
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
                 if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
+                guardar_alertas(ip, alerts)
             self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:
@@ -2749,6 +2758,7 @@ class App(ctk.CTk):
             ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
             est = "critico" if tc else "alerta" if ta else "ok"
             if cons: guardar_historial(ip, cons)
+            guardar_alertas(ip, alerts)
         self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info,"alerts":alerts}
         self.after(0, self._poblar_tabla)
 

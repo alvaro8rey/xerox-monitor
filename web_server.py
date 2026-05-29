@@ -11,6 +11,7 @@ BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
 DB_FILE           = os.path.join(BASE_DIR, "impresoras.json")
 HISTORIAL_FILE    = os.path.join(BASE_DIR, "historial.json")
 CONTABILIDAD_FILE = os.path.join(BASE_DIR, "contabilidad_xsa.json")
+ALERTAS_FILE      = os.path.join(BASE_DIR, "alertas.json")
 CONFIG_FILE       = os.path.join(BASE_DIR, "config.json")
 
 DEFAULT_CONFIG = {"umbral_critico": 15, "umbral_alerta": 20}
@@ -31,6 +32,7 @@ def api_impresoras():
     cfg       = {**DEFAULT_CONFIG, **_load(CONFIG_FILE, {})}
     impres    = _load(DB_FILE, [])
     historial = _load(HISTORIAL_FILE, {})
+    alertas   = _load(ALERTAS_FILE, {})
     crit      = cfg["umbral_critico"]
     alerta    = cfg["umbral_alerta"]
 
@@ -38,7 +40,7 @@ def api_impresoras():
     for imp in impres:
         if isinstance(imp, str):
             imp = {"ip": imp, "nombre": imp, "ubicacion": ""}
-        ip       = imp.get("ip", "")
+        ip        = imp.get("ip", "")
         registros = historial.get(ip, [])
         ultimo    = registros[-1] if registros else None
         cons      = ultimo["consumibles"] if ultimo else None
@@ -59,8 +61,12 @@ def api_impresoras():
                 })
             cons_list.sort(key=lambda x: x["pct"])
 
-        # Usar el nombre guardado en el último registro del historial (puede venir de SNMP)
         nombre = (ultimo.get("nombre") if ultimo else None) or imp.get("nombre", ip)
+
+        # Alertas activas guardadas por la app de escritorio
+        alerta_ip = alertas.get(ip, {})
+        alerts_list = alerta_ip.get("alerts", [])
+
         out.append({
             "nombre":    nombre,
             "ip":        ip,
@@ -68,6 +74,7 @@ def api_impresoras():
             "estado":    estado,
             "ts":        ts,
             "consumibles": cons_list,
+            "alerts":    alerts_list,
         })
 
     out.sort(key=lambda x: (
@@ -102,7 +109,6 @@ def api_contabilidad():
         sorted_keys = sorted(snapshots.keys())
         if not sorted_keys:
             continue
-        meses = sorted_keys  # para el selector en el front
 
         result.append({
             "ip":           ip,
@@ -172,15 +178,22 @@ tr.off td{color:#6c7a99}
 .cons-lbl{width:150px;min-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#c8cae0}
 .cons-pct{width:34px;text-align:right;font-size:11px}
 
+/* ALERTAS */
+.alerts-cell{display:flex;flex-direction:column;gap:2px}
+.alert-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.alert-crit{background:#3d0f0f;color:#e74c3c}
+.alert-warn{background:#2e1e00;color:#f39c12}
+.alert-info{background:#0f1e3d;color:#7ab4f5}
+
 /* CONTABILIDAD */
 .cont-controls{display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
 .cont-controls label{color:#8b92b8;font-size:12px}
 select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10px;border-radius:6px;font-size:13px;font-family:inherit}
-.sec-header td{background:#1c2a3a;color:#7ab4f5;font-weight:700;font-size:12px}
+.sec-header td{background:#1c2a3a;color:#7ab4f5;font-weight:700;font-size:12px;cursor:pointer}
 .total-row td{background:#2c3057;font-weight:700;color:#4f8ef7}
 
 /* PIN MODAL */
-.pin-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center}
+.pin-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;align-items:center;justify-content:center}
 .pin-overlay.show{display:flex}
 .pin-box{background:#232640;border:1px solid #353860;border-radius:12px;padding:32px 36px;text-align:center;min-width:280px}
 .pin-box h2{font-size:15px;margin-bottom:6px}
@@ -193,36 +206,20 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 .pin-key:hover{background:#353860}
 .pin-key:active{background:#4f8ef7}
 .pin-err{color:#e74c3c;font-size:12px;min-height:18px;margin-top:8px}
-.pin-cancel{background:none;border:none;color:#8b92b8;font-size:12px;cursor:pointer;margin-top:14px;display:block;width:100%;text-align:center}
-.pin-cancel:hover{color:#e8eaf0}
 
 /* LOADER */
 .loader{text-align:center;padding:40px;color:#8b92b8}
 .spinner{display:inline-block;width:28px;height:28px;border:3px solid #353860;border-top-color:#4f8ef7;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}
 @keyframes spin{to{transform:rotate(360deg)}}
-
-/* DETAIL PANEL */
-.detail-row td{background:#1e2238}
 </style>
 </head>
 <body>
 
-<header>
-  <span style="font-size:20px">🖨</span>
-  <h1>Fleet Monitor Pro</h1>
-  <div style="display:flex;gap:8px" id="kpi-badges"></div>
-  <span class="ts" id="last-update">Cargando...</span>
-</header>
-
-<nav>
-  <button class="active" onclick="showTab('impresoras',this)">Impresoras</button>
-  <button id="btn-cont" onclick="askPin(this)">Contabilidad</button>
-</nav>
-
-<div class="pin-overlay" id="pin-overlay">
+<!-- PIN MODAL — bloquea toda la página hasta autenticarse -->
+<div class="pin-overlay show" id="pin-overlay">
   <div class="pin-box">
-    <h2>🔒 Acceso restringido</h2>
-    <p>Introduce el PIN para acceder a Contabilidad</p>
+    <h2>🔒 Fleet Monitor Pro</h2>
+    <p>Introduce el PIN para acceder</p>
     <div class="pin-dots" id="pin-dots">
       <div class="pin-dot" id="pd0"></div>
       <div class="pin-dot" id="pd1"></div>
@@ -244,9 +241,20 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
       <button class="pin-key" onclick="pinKey('clear')" style="font-size:12px">C</button>
     </div>
     <div class="pin-err" id="pin-err"></div>
-    <button class="pin-cancel" onclick="closePin()">Cancelar</button>
   </div>
 </div>
+
+<header>
+  <span style="font-size:20px">🖨</span>
+  <h1>Fleet Monitor Pro</h1>
+  <div style="display:flex;gap:8px" id="kpi-badges"></div>
+  <span class="ts" id="last-update"></span>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('impresoras',this)">Impresoras</button>
+  <button onclick="showTab('contabilidad',this)">Contabilidad</button>
+</nav>
 
 <section id="tab-impresoras" class="active">
   <div id="imp-table-wrap"><div class="loader"><span class="spinner"></span>Cargando datos...</div></div>
@@ -255,7 +263,7 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 <section id="tab-contabilidad">
   <div class="cont-controls">
     <label>Impresora:</label>
-    <select id="sel-imp" onchange="renderContabilidad()"></select>
+    <select id="sel-imp" onchange="updateMesOptions();renderContabilidad()"></select>
     <label>Mes:</label>
     <select id="sel-mes" onchange="renderContabilidad()"></select>
     <label>Vista:</label>
@@ -268,64 +276,51 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 </section>
 
 <script>
-let _impData = [];
+let _impData  = [];
 let _contData = [];
-
 let _pinUnlocked = false;
 let _pinBuffer   = '';
 const PIN_CORRECT = '2026';
 
-function showTab(name, btn) {
-  document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
-  if (name === 'contabilidad' && _contData.length === 0) loadContabilidad();
-}
-
-function askPin(btn) {
-  if (_pinUnlocked) { showTab('contabilidad', btn); return; }
-  _pinBuffer = '';
-  updatePinDots();
-  document.getElementById('pin-err').textContent = '';
-  document.getElementById('pin-overlay').classList.add('show');
-}
-
-function closePin() {
-  document.getElementById('pin-overlay').classList.remove('show');
-  _pinBuffer = '';
-  updatePinDots();
-}
-
+// ── PIN ───────────────────────────────────────────────────────────────────────
 function pinKey(k) {
-  if (k === 'back')  { _pinBuffer = _pinBuffer.slice(0,-1); }
-  else if (k==='clear') { _pinBuffer = ''; }
-  else if (_pinBuffer.length < 4) { _pinBuffer += k; }
+  if (k === 'back')      _pinBuffer = _pinBuffer.slice(0, -1);
+  else if (k === 'clear') _pinBuffer = '';
+  else if (_pinBuffer.length < 4) _pinBuffer += k;
   updatePinDots();
   document.getElementById('pin-err').textContent = '';
   if (_pinBuffer.length === 4) {
     if (_pinBuffer === PIN_CORRECT) {
       _pinUnlocked = true;
-      closePin();
-      showTab('contabilidad', document.getElementById('btn-cont'));
+      document.getElementById('pin-overlay').classList.remove('show');
+      loadImpresoras();
+      loadContabilidad();
     } else {
       document.getElementById('pin-err').textContent = 'PIN incorrecto';
-      setTimeout(() => { _pinBuffer=''; updatePinDots(); }, 700);
+      setTimeout(() => { _pinBuffer = ''; updatePinDots(); }, 700);
     }
   }
 }
 
 function updatePinDots() {
-  for (let i=0;i<4;i++)
-    document.getElementById('pd'+i).classList.toggle('filled', i < _pinBuffer.length);
+  for (let i = 0; i < 4; i++)
+    document.getElementById('pd' + i).classList.toggle('filled', i < _pinBuffer.length);
 }
 
 document.addEventListener('keydown', e => {
   if (!document.getElementById('pin-overlay').classList.contains('show')) return;
-  if (e.key>='0' && e.key<='9') pinKey(e.key);
-  else if (e.key==='Backspace') pinKey('back');
-  else if (e.key==='Escape') closePin();
+  if (e.key >= '0' && e.key <= '9') pinKey(e.key);
+  else if (e.key === 'Backspace') pinKey('back');
+  else if (e.key === 'Escape') {}  // no se puede cerrar sin PIN
 });
+
+// ── TABS ──────────────────────────────────────────────────────────────────────
+function showTab(name, btn) {
+  document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
 
 // ── IMPRESORAS ────────────────────────────────────────────────────────────────
 async function loadImpresoras() {
@@ -358,9 +353,10 @@ function renderImpresoras() {
     'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
 
   let rows = data.map(d => {
-    const cls = d.estado==='critico'?'crit':d.estado==='alerta'?'warn':d.estado==='sin datos'?'off':'';
+    const cls    = d.estado==='critico'?'crit':d.estado==='alerta'?'warn':d.estado==='sin datos'?'off':'';
     const dotCls = d.estado==='critico'?'dot-crit':d.estado==='alerta'?'dot-warn':d.estado==='sin datos'?'dot-off':'dot-ok';
-    const ts = d.ts ? d.ts.slice(0,16) : '—';
+    const ts     = d.ts ? d.ts.slice(0,16) : '—';
+
     const consBars = d.consumibles.length ? `
       <div class="cons-bars">
         ${d.consumibles.slice(0,6).map(c => `
@@ -370,11 +366,22 @@ function renderImpresoras() {
             <span class="cons-pct ${c.estado==='critico'?'col-crit':c.estado==='alerta'?'col-warn':''}">${c.pct>=0?c.pct+'%':'?'}</span>
           </div>`).join('')}
       </div>` : '<span style="color:#6c7a99">Sin datos</span>';
+
+    const alertBadges = (d.alerts||[]).map(a => {
+      const cls2 = a.nivel==='critical'?'alert-crit':a.nivel==='warning'?'alert-warn':'alert-info';
+      const ico  = a.nivel==='critical'?'🔴':a.nivel==='warning'?'🟡':'🔵';
+      return `<span class="alert-badge ${cls2}">${ico} ${esc(a.texto)}</span>`;
+    }).join('');
+    const alertsCell = alertBadges
+      ? `<div class="alerts-cell">${alertBadges}</div>`
+      : '<span style="color:#6c7a99;font-size:12px">—</span>';
+
     return `<tr class="${cls}">
       <td><span class="dot ${dotCls}"></span>${esc(d.nombre)}</td>
       <td style="color:#8b92b8">${esc(d.ip)}</td>
       <td style="color:#8b92b8">${esc(d.ubicacion||'')}</td>
       <td>${consBars}</td>
+      <td>${alertsCell}</td>
       <td style="color:#6c7a99;font-size:12px">${ts}</td>
     </tr>`;
   }).join('');
@@ -383,7 +390,7 @@ function renderImpresoras() {
     <table>
       <thead><tr>
         <th>Nombre</th><th>IP</th><th>Ubicación</th>
-        <th>Consumibles</th><th>Última lectura</th>
+        <th>Consumibles</th><th>Alertas</th><th>Última lectura</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -419,10 +426,6 @@ function updateMesOptions() {
     meses.map(m => `<option value="${m}">${mesLabel(m)}</option>`).join('');
 }
 
-document.getElementById('sel-imp').addEventListener('change', () => {
-  updateMesOptions(); renderContabilidad();
-});
-
 function mesLabel(key) {
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                  'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -441,7 +444,6 @@ function renderContabilidad() {
   const DEPTOS = new Set(imp.departamentos.map(d=>d.toLowerCase()));
   const EXCL   = new Set(imp.excluir.map(d=>d.toLowerCase()));
 
-  // Snapshot actual y anterior
   let curKey, prevKey = null;
   if (mesV === 'Acumulado' || vista === 'Acumulado') {
     curKey = sorted[sorted.length-1];
@@ -450,7 +452,10 @@ function renderContabilidad() {
     const idx2 = sorted.indexOf(curKey);
     if (idx2 > 0) prevKey = sorted[idx2-1];
   }
-  if (!curKey) { document.getElementById('cont-table-wrap').innerHTML='<div class="loader">Sin snapshots</div>'; return; }
+  if (!curKey) {
+    document.getElementById('cont-table-wrap').innerHTML = '<div class="loader">Sin snapshots</div>';
+    return;
+  }
 
   const curSnap  = imp.snapshots[curKey]  || {usuarios:[]};
   const prevSnap = prevKey ? imp.snapshots[prevKey] : null;
@@ -478,41 +483,30 @@ function renderContabilidad() {
   const hasColor = [...deptos,...users].some(r=>r.ic>0||r.cc>0);
   const colColor = hasColor ? `<th>Imp. Color</th><th>Cop. Color</th>` : '';
 
-  function fRow(r, cls='') {
+  function fRow(r) {
     const color = hasColor ? `<td>${r.ic||'—'}</td><td>${r.cc||'—'}</td>` : '';
-    return `<tr class="${cls}">
-      <td>${esc(r.label)}</td>
-      <td>${r.ib||'—'}</td>${color}
-      <td>${r.cb||'—'}</td>
-      <td>${r.total||'—'}</td>
-    </tr>`;
+    return `<tr><td>${esc(r.label)}</td><td>${r.ib||'—'}</td>${color}<td>${r.cb||'—'}</td><td>${r.total||'—'}</td></tr>`;
   }
 
-  // Estado de colapso persistente entre renders
   if (!renderContabilidad._collapsed) renderContabilidad._collapsed = {};
   const _col = renderContabilidad._collapsed;
 
   function secHeader(key, titulo) {
-    const collapsed = !!_col[key];
     const cols = 4 + (hasColor?2:0);
-    const icono = collapsed ? '▶' : '▼';
-    return `<tr class="sec-header" style="cursor:pointer" onclick="toggleSection('${key}')">
+    const icono = _col[key] ? '▶' : '▼';
+    return `<tr class="sec-header" onclick="toggleSection('${key}')">
       <td colspan="${cols}">${icono}&nbsp;&nbsp;${titulo}</td></tr>`;
   }
-
   function secRows(key, filas) {
-    if (_col[key]) return '';
-    return filas.map(r => fRow(r)).join('');
+    return _col[key] ? '' : filas.map(r => fRow(r)).join('');
   }
 
   const all = [...deptos,...users];
   const totColor = hasColor ?
     `<td>${all.reduce((s,r)=>s+r.ic,0)||'—'}</td><td>${all.reduce((s,r)=>s+r.cc,0)||'—'}</td>` : '';
   const totalRow = `<tr class="total-row">
-    <td>TOTAL</td>
-    <td>${all.reduce((s,r)=>s+r.ib,0)||'—'}</td>${totColor}
-    <td>${all.reduce((s,r)=>s+r.cb,0)||'—'}</td>
-    <td>${all.reduce((s,r)=>s+r.total,0)||'—'}</td>
+    <td>TOTAL</td><td>${all.reduce((s,r)=>s+r.ib,0)||'—'}</td>${totColor}
+    <td>${all.reduce((s,r)=>s+r.cb,0)||'—'}</td><td>${all.reduce((s,r)=>s+r.total,0)||'—'}</td>
   </tr>`;
 
   const titulo = mesV==='Acumulado' ? 'Acumulado' : mesLabel(curKey);
@@ -523,12 +517,10 @@ function renderContabilidad() {
       ${prevKey?'&nbsp;·&nbsp; mes anterior: '+mesLabel(prevKey):''}
     </p>
     <table>
-      <thead><tr>
-        <th>Usuario</th><th>Imp. B/N</th>${colColor}<th>Cop. B/N</th><th>Total</th>
-      </tr></thead>
+      <thead><tr><th>Usuario</th><th>Imp. B/N</th>${colColor}<th>Cop. B/N</th><th>Total</th></tr></thead>
       <tbody>
         ${deptos.length ? secHeader('deptos','DEPARTAMENTOS ('+deptos.length+')') + secRows('deptos',deptos) : ''}
-        ${users.length  ? secHeader('users', 'USUARIOS ('     +users.length +')')  + secRows('users', users)  : ''}
+        ${users.length  ? secHeader('users', 'USUARIOS ('    +users.length +')')  + secRows('users', users)  : ''}
         ${totalRow}
       </tbody>
     </table>`;
@@ -545,8 +537,9 @@ function esc(s) {
 }
 
 // ── AUTO REFRESH ──────────────────────────────────────────────────────────────
-loadImpresoras();
-setInterval(loadImpresoras, 30000);  // refresca impresoras cada 30s
+// Carga inicial tras PIN — si se carga antes del PIN, se lanza desde pinKey()
+// setInterval de refresco solo cuando ya estamos autenticados
+setInterval(() => { if (_pinUnlocked) loadImpresoras(); }, 30000);
 </script>
 </body>
 </html>
