@@ -1061,7 +1061,6 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
         if self._sel_mes not in new_mes_vals:
             self._sel_mes = new_mes_vals[0] if new_mes_vals else "Acumulado"
             self._mes_combo.set(self._sel_mes)
-        self._update_imp_col_visibility()
         self._poblar()
 
     def _on_mes_change(self, value):
@@ -1072,13 +1071,23 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
         self._sel_vista = value
         self._poblar()
 
-    def _update_imp_col_visibility(self):
+    def _update_imp_col_visibility(self, has_color=True):
         if self._sel_impresora == "Todas":
             self.tree.column("impresora", width=160, stretch=True)
             self.tree.heading("impresora", text="Impresora")
         else:
             self.tree.column("impresora", width=0, stretch=False, minwidth=0)
             self.tree.heading("impresora", text="")
+        # Columnas color: ocultar si no hay ningún valor
+        if has_color:
+            self.tree.column("imp_color", width=90, stretch=False, minwidth=40)
+            self.tree.heading("imp_color", text="Imp. Color")
+            self.tree.column("cop_color", width=90, stretch=False, minwidth=40)
+            self.tree.heading("cop_color", text="Cop. Color")
+        else:
+            for col in ("imp_color", "cop_color"):
+                self.tree.column(col, width=0, stretch=False, minwidth=0)
+                self.tree.heading(col, text="")
 
     def _descargar_auto(self):
         if not REQUESTS_OK:
@@ -1406,8 +1415,9 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
         tot_cop_color = sum(r[5] for r in all_rows)
         tot_total     = sum(r[6] for r in all_rows)
 
+        has_color = tot_imp_color > 0 or tot_cop_color > 0
         show_imp_col = (ip_filter == "Todas")
-        self._update_imp_col_visibility()
+        self._update_imp_col_visibility(has_color)
 
         def _insertar_seccion(titulo, filas):
             if not filas:
