@@ -269,6 +269,7 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
       <option value="Acumulado">Acumulado</option>
       <option value="Mensual">Mensual</option>
     </select>
+    <button onclick="exportarCSV()" style="margin-left:auto;background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 14px;border-radius:6px;font-size:13px;font-family:inherit;cursor:pointer">⬇ Exportar CSV</button>
   </div>
   <div id="cont-table-wrap"><div class="loader"><span class="spinner"></span>Cargando...</div></div>
 </section>
@@ -541,6 +542,70 @@ function renderContabilidad() {
         ${totalRow}
       </tbody>
     </table>`;
+}
+
+function exportarCSV() {
+  const idx   = parseInt(document.getElementById('sel-imp').value||'0');
+  const mesV  = document.getElementById('sel-mes').value;
+  const vista = document.getElementById('sel-vista').value;
+  const imp   = _contData[idx];
+  if (!imp) return;
+
+  const sorted = [...imp.meses].sort();
+  const DEPTOS = new Set(imp.departamentos.map(d=>d.toLowerCase()));
+  const EXCL   = new Set(imp.excluir.map(d=>d.toLowerCase()));
+
+  let curKey, prevKey = null;
+  if (mesV === 'Acumulado' || vista === 'Acumulado') {
+    curKey = sorted[sorted.length-1];
+  } else {
+    curKey = sorted.includes(mesV) ? mesV : sorted[sorted.length-1];
+    const idx2 = sorted.indexOf(curKey);
+    if (idx2 > 0) prevKey = sorted[idx2-1];
+  }
+  if (!curKey) return;
+
+  const curSnap = imp.snapshots[curKey] || {usuarios:[]};
+  const prevSnap = prevKey ? imp.snapshots[prevKey] : null;
+  const prevMap  = prevSnap ? Object.fromEntries(prevSnap.usuarios.map(u=>[u.usuario,u])) : {};
+
+  let rows = [];
+  for (const u of curSnap.usuarios) {
+    if (EXCL.has(u.usuario.toLowerCase())) continue;
+    const uid = u.id||'';
+    let ib=u.imp_bw, ic=u.imp_color, cb=u.cop_bw, cc=u.cop_color;
+    if (prevKey && prevMap[u.usuario]) {
+      const p = prevMap[u.usuario];
+      ib=Math.max(0,ib-p.imp_bw); ic=Math.max(0,ic-p.imp_color);
+      cb=Math.max(0,cb-p.cop_bw); cc=Math.max(0,cc-p.cop_color);
+    }
+    const tipo = DEPTOS.has(u.usuario.toLowerCase()) ? 'Departamento' : 'Usuario';
+    rows.push([u.usuario, uid, tipo, ib, ic, cb, cc, ib+ic+cb+cc]);
+  }
+  rows.sort((a,b) => b[7]-a[7]);
+
+  const hasColor = rows.some(r=>r[2]>0||r[3]>0);
+  const titulo = mesV==='Acumulado' ? 'Acumulado' : mesLabel(curKey);
+
+  let csv = '﻿';  // BOM para Excel
+  if (hasColor) {
+    csv += 'Usuario,ID,Tipo,Imp B/N,Imp Color,Cop B/N,Cop Color,Total\r\n';
+    rows.forEach(r => csv += `"${r[0]}","${r[1]}","${r[2]}",${r[3]},${r[4]},${r[5]},${r[6]},${r[7]}\r\n`);
+    const tot = rows.reduce((s,r)=>({3:s[3]+r[3],4:s[4]+r[4],5:s[5]+r[5],6:s[6]+r[6],7:s[7]+r[7]}),{3:0,4:0,5:0,6:0,7:0});
+    csv += `"TOTAL","","",${tot[3]},${tot[4]},${tot[5]},${tot[6]},${tot[7]}\r\n`;
+  } else {
+    csv += 'Usuario,ID,Tipo,Imp B/N,Cop B/N,Total\r\n';
+    rows.forEach(r => csv += `"${r[0]}","${r[1]}","${r[2]}",${r[3]},${r[5]},${r[7]}\r\n`);
+    const tot = rows.reduce((s,r)=>({3:s[3]+r[3],5:s[5]+r[5],7:s[7]+r[7]}),{3:0,5:0,7:0});
+    csv += `"TOTAL","","",${tot[3]},${tot[5]},${tot[7]}\r\n`;
+  }
+
+  const nombre_fichero = `contabilidad_${imp.nombre.replace(/[^a-z0-9]/gi,'_')}_${titulo.replace(/\s/g,'_')}.csv`;
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = nombre_fichero; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function toggleSection(key) {
