@@ -2,7 +2,7 @@
 Descarga CSV XSA Xerox AltaLink C8170.
 Uso: python test_web_accounting.py
 """
-import requests, re
+import requests, re, time
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
@@ -60,7 +60,34 @@ if "login.php" in r.url:
 print(f"  ✔ En página de contabilidad: {r.url}")
 print(f"  Cookies completas: {dict(s.cookies)}")
 
-# ── 3. Paso generate: NO seguir redirect, capturar Location exacta ───────────
+# ── 3. POST a xerox.set para GENERAR el fichero CSV (como hace el browser) ────
+import time as _time
+_ts = int(_time.time() * 1000)
+print(f"\n── Paso 0: POST xerox.set para disparar generación del CSV...")
+# Obtener CSRF fresco desde la página de contabilidad
+csrf2 = (re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text) or
+         re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text))
+csrf2_val = csrf2.group(1) if csrf2 else ""
+print(f"  CSRF para generate: {csrf2_val!r}")
+
+rp = s.post(f"{BASE}/userpost/xerox.set?ajts{_ts}",
+            headers={
+                "Referer":           BASE + REDIR,
+                "Origin":            BASE,
+                "X-Requested-With":  "XMLHttpRequest",
+                "Accept":            "application/json, text/javascript, */*; q=0.01",
+                "Content-Type":      "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            data={
+                "_fun_function":  "XSA_Generate_fn",
+                "CSRFToken":      csrf2_val,
+            })
+print(f"  [{rp.status_code}] Content-Type: {rp.headers.get('Content-Type','')}")
+print(f"  Body: {rp.text[:300]!r}")
+
+time.sleep(0.5)  # esperar a que el servidor genere el fichero
+
+# ── 4. Paso generate: NO seguir redirect, capturar Location exacta ───────────
 print("\n── Paso 1: XSA_generate_date.php (sin seguir redirect)...")
 rg = s.get(f"{BASE}/properties/accounting/XSA_generate_date.php",
            allow_redirects=False,
@@ -94,7 +121,7 @@ if not loc:
 download_url = loc if loc.startswith("http") else BASE + loc
 print(f"\n── Paso 2: GET {download_url}")
 
-import time; time.sleep(0.3)   # pequeña pausa por si el servidor necesita generar el fichero
+time.sleep(0.3)
 
 r = s.get(download_url,
           allow_redirects=False,
