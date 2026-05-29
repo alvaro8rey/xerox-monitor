@@ -878,6 +878,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         self._sel_vista = "Acumulado"
         self._sort_col = None
         self._sort_rev = False
+        self._collapsed = {"DEPARTAMENTOS": False, "USUARIOS": False}
         self._build()
 
     def _migrar_formato_antiguo(self):
@@ -993,6 +994,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         self.tree.tag_configure("totales",   background=BG3,      foreground=ACCENT)
         self.tree.tag_configure("seccion",   background="#1c2a3a", foreground="#7ab4f5",
                                 font=("Segoe UI", 10, "bold"))
+        self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
         # ── Status bar ──
         self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
@@ -1389,11 +1391,18 @@ class DialogContabilidad(ctk.CTkToplevel):
         def _insertar_seccion(titulo, filas):
             if not filas:
                 return
-            # Cabecera de sección (ocupa columna usuario, el resto vacío)
-            self.tree.insert("", "end", values=(
-                "", f"▸  {titulo}  ({len(filas)})",
+            collapsed = self._collapsed.get(titulo, False)
+            icono = "▶" if collapsed else "▼"
+            iid_sec = f"sec_{titulo}"
+            # Eliminar si ya existe (repoblado)
+            if self.tree.exists(iid_sec):
+                self.tree.delete(iid_sec)
+            self.tree.insert("", "end", iid=iid_sec, values=(
+                "", f"{icono}  {titulo}  ({len(filas)})",
                 "", "", "", "", "", "",
             ), tags=("seccion",))
+            if collapsed:
+                return
             alt = False
             for r in filas:
                 tag = "par" if alt else "impar"
@@ -1432,6 +1441,13 @@ class DialogContabilidad(ctk.CTkToplevel):
             self._datos = {}
             guardar_json(CONTABILIDAD_FILE, self._datos)
             self._refresh_controls()
+            self._poblar()
+
+    def _on_tree_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid and iid.startswith("sec_"):
+            titulo = iid[4:]  # quitar "sec_"
+            self._collapsed[titulo] = not self._collapsed.get(titulo, False)
             self._poblar()
 
     def _sort(self, col):
