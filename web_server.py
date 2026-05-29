@@ -199,9 +199,9 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 .pin-box{background:#232640;border:1px solid #353860;border-radius:12px;padding:32px 36px;text-align:center;min-width:280px}
 .pin-box h2{font-size:15px;margin-bottom:6px}
 .pin-box p{color:#8b92b8;font-size:12px;margin-bottom:20px}
-.pin-dots{display:flex;justify-content:center;gap:12px;margin-bottom:20px}
-.pin-dot{width:14px;height:14px;border-radius:50%;background:#2c3057;border:2px solid #353860;transition:background .15s}
-.pin-dot.filled{background:#4f8ef7;border-color:#4f8ef7}
+#pin-input{width:180px;padding:14px;font-size:28px;letter-spacing:8px;text-align:center;background:#1a1d2e;border:2px solid #353860;border-radius:8px;color:#e8eaf0;outline:none;font-family:monospace;display:block;margin:0 auto 6px}
+#pin-input:focus{border-color:#4f8ef7}
+.pin-hint{color:#8b92b8;font-size:11px;margin-bottom:16px}
 .pin-keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:200px;margin:0 auto}
 .pin-key{background:#2c3057;border:none;color:#e8eaf0;font-size:18px;font-family:inherit;padding:14px;border-radius:8px;cursor:pointer;transition:background .15s}
 .pin-key:hover{background:#353860}
@@ -218,31 +218,25 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 
 <!-- PIN MODAL — bloquea toda la página hasta autenticarse -->
 <div class="pin-overlay show" id="pin-overlay">
-  <!-- input oculto que captura el teclado físico -->
-  <input id="pin-capture" type="tel" autocomplete="off" autofocus
-         style="position:fixed;top:-200px;left:-200px;width:1px;height:1px;opacity:0">
-  <div class="pin-box" onclick="document.getElementById('pin-capture').focus()">
+  <div class="pin-box">
     <h2>🔒 Fleet Monitor Pro</h2>
     <p>Introduce el PIN para acceder</p>
-    <div class="pin-dots" id="pin-dots">
-      <div class="pin-dot" id="pd0"></div>
-      <div class="pin-dot" id="pd1"></div>
-      <div class="pin-dot" id="pd2"></div>
-      <div class="pin-dot" id="pd3"></div>
-    </div>
+    <input id="pin-input" type="password" inputmode="numeric" maxlength="10"
+           autocomplete="off" autofocus placeholder="····">
+    <div class="pin-hint">Pulsa Enter o usa el teclado</div>
     <div class="pin-keypad">
-      <button class="pin-key" onclick="pinKey('1')">1</button>
-      <button class="pin-key" onclick="pinKey('2')">2</button>
-      <button class="pin-key" onclick="pinKey('3')">3</button>
-      <button class="pin-key" onclick="pinKey('4')">4</button>
-      <button class="pin-key" onclick="pinKey('5')">5</button>
-      <button class="pin-key" onclick="pinKey('6')">6</button>
-      <button class="pin-key" onclick="pinKey('7')">7</button>
-      <button class="pin-key" onclick="pinKey('8')">8</button>
-      <button class="pin-key" onclick="pinKey('9')">9</button>
-      <button class="pin-key" onclick="pinKey('back')" style="font-size:14px">⌫</button>
-      <button class="pin-key" onclick="pinKey('0')">0</button>
-      <button class="pin-key" onclick="pinKey('clear')" style="font-size:12px">C</button>
+      <button class="pin-key" onclick="padKey('1')">1</button>
+      <button class="pin-key" onclick="padKey('2')">2</button>
+      <button class="pin-key" onclick="padKey('3')">3</button>
+      <button class="pin-key" onclick="padKey('4')">4</button>
+      <button class="pin-key" onclick="padKey('5')">5</button>
+      <button class="pin-key" onclick="padKey('6')">6</button>
+      <button class="pin-key" onclick="padKey('7')">7</button>
+      <button class="pin-key" onclick="padKey('8')">8</button>
+      <button class="pin-key" onclick="padKey('9')">9</button>
+      <button class="pin-key" onclick="padKey('back')" style="font-size:14px">⌫</button>
+      <button class="pin-key" onclick="padKey('0')">0</button>
+      <button class="pin-key" onclick="padKey('clear')" style="font-size:12px">C</button>
     </div>
     <div class="pin-err" id="pin-err"></div>
   </div>
@@ -283,49 +277,53 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 let _impData  = [];
 let _contData = [];
 let _pinUnlocked = false;
-let _pinBuffer   = '';
 const VALID_PINS = new Set({{ pins_json }});
-const _maxPinLen = Math.max(...[...VALID_PINS].map(p => p.length));
 
 // ── PIN ───────────────────────────────────────────────────────────────────────
-function pinKey(k) {
-  if (k === 'back')       _pinBuffer = _pinBuffer.slice(0, -1);
-  else if (k === 'clear') _pinBuffer = '';
-  else if (_pinBuffer.length < _maxPinLen) _pinBuffer += k;
-  updatePinDots();
+function _pinUnlock() {
+  _pinUnlocked = true;
+  document.getElementById('pin-overlay').classList.remove('show');
+  document.body.classList.remove('locked');
+  loadImpresoras();
+  loadContabilidad();
+}
+
+function _pinError() {
+  document.getElementById('pin-err').textContent = 'PIN incorrecto';
+  setTimeout(() => {
+    document.getElementById('pin-input').value = '';
+    document.getElementById('pin-err').textContent = '';
+    document.getElementById('pin-input').focus();
+  }, 700);
+}
+
+function checkPin() {
+  const val = document.getElementById('pin-input').value;
+  if (VALID_PINS.has(val)) _pinUnlock();
+  else if (val.length > 0) _pinError();
+}
+
+// Botones del teclado numérico en pantalla
+function padKey(k) {
+  const inp = document.getElementById('pin-input');
+  if (k === 'back')       inp.value = inp.value.slice(0, -1);
+  else if (k === 'clear') inp.value = '';
+  else                    inp.value += k;
   document.getElementById('pin-err').textContent = '';
-  // Comprobar si ya es un PIN válido
-  if (VALID_PINS.has(_pinBuffer)) {
-    _pinUnlocked = true;
-    document.getElementById('pin-overlay').classList.remove('show');
-    document.body.classList.remove('locked');
-    loadImpresoras();
-    loadContabilidad();
-  } else if (_pinBuffer.length === _maxPinLen) {
-    document.getElementById('pin-err').textContent = 'PIN incorrecto';
-    setTimeout(() => { _pinBuffer = ''; updatePinDots();
-      document.getElementById('pin-err').textContent = ''; }, 700);
-  }
-  // Devolver foco al input oculto para seguir capturando teclado
-  document.getElementById('pin-capture').focus();
+  // Auto-submit en cuanto coincide con algún PIN
+  if (VALID_PINS.has(inp.value)) _pinUnlock();
+  inp.focus();
 }
 
-function updatePinDots() {
-  for (let i = 0; i < 4; i++)
-    document.getElementById('pd' + i).classList.toggle('filled', i < _pinBuffer.length);
-}
+// Enter en el input de texto
+document.getElementById('pin-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') checkPin();
+});
 
-// Teclado físico → capturado por el input oculto
-document.getElementById('pin-capture').addEventListener('keydown', function(e) {
-  if (e.key >= '0' && e.key <= '9') { pinKey(e.key); e.preventDefault(); }
-  else if (e.key === 'Backspace')    { pinKey('back'); e.preventDefault(); }
-  else if (e.key === 'Enter' && _pinBuffer.length > 0) {
-    // Forzar comprobación aunque sea más corto
-    if (VALID_PINS.has(_pinBuffer)) pinKey('');  // re-trigger check
-    else { document.getElementById('pin-err').textContent = 'PIN incorrecto';
-      setTimeout(() => { _pinBuffer=''; updatePinDots();
-        document.getElementById('pin-err').textContent=''; }, 700); }
-  }
+// Auto-submit al escribir si ya coincide
+document.getElementById('pin-input').addEventListener('input', function() {
+  document.getElementById('pin-err').textContent = '';
+  if (VALID_PINS.has(this.value)) _pinUnlock();
 });
 
 // ── TABS ──────────────────────────────────────────────────────────────────────
