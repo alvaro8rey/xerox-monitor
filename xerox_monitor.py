@@ -16,6 +16,49 @@ try:
 except Exception as e:
     SNMP_ERROR = str(e)
 
+# ── HELPERS CONSUMIBLES ───────────────────────────────────────────────────────
+_ABREV_MAP = [
+    ("Black Toner",   "Negro"),  ("Cyan Toner",    "Cian"),
+    ("Magenta Toner", "Magenta"),("Yellow Toner",  "Amarillo"),
+    ("Black Drum",    "Tambor Negro"), ("Cyan Drum","Tambor Cian"),
+    ("Magenta Drum",  "Tambor Magenta"),("Yellow Drum","Tambor Amarillo"),
+    ("Black",  "Negro"), ("Cyan",  "Cian"),
+    ("Magenta","Magenta"),("Yellow","Amarillo"),
+    ("Toner",  "Tóner"), ("Drum",  "Tambor"), ("Fuser","Fusor"),
+    ("Transfer Roller","Transfer"),("Transfer","Transfer"),
+    ("Maintenance","Mant."),("Waste Toner","Residuo"),
+    ("Waste",  "Residuo"),("Staple","Grapas"),
+    ("Hole Punch","Taladro"),
+]
+
+def _abrev_consumible(name):
+    n = name
+    for orig, rep in _ABREV_MAP:
+        if orig.lower() in n.lower():
+            n = n.lower().replace(orig.lower(), rep)
+            break
+    n = n.strip().title()
+    return n[:16] if len(n) > 16 else n
+
+def _formato_consumibles(cons, umbral_critico, umbral_alerta):
+    if not cons:
+        return "—"
+    sorted_c = sorted(cons, key=lambda c: c["porcentaje"])
+    parts, ok_count = [], 0
+    for c in sorted_c:
+        pct = c["porcentaje"]
+        if pct <= umbral_alerta:
+            sym = "⚠" if pct <= umbral_critico else "·"
+            parts.append(f"{sym} {_abrev_consumible(c['componente'])}: {pct}%")
+        else:
+            ok_count += 1
+    if ok_count == 1:
+        ok_item = next(c for c in cons if c["porcentaje"] > umbral_alerta)
+        parts.append(f"✓ {_abrev_consumible(ok_item['componente'])}: {ok_item['porcentaje']}%")
+    elif ok_count > 1:
+        parts.append(f"✓ {ok_count} en buen nivel")
+    return "   ".join(parts) if parts else "✓ Todo OK"
+
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 DB_FILE        = "impresoras.json"
 HISTORIAL_FILE = "historial.json"
@@ -678,7 +721,7 @@ class App(ctk.CTk):
             if error:
                 cons_str = f"⚠  {error[:55]}"
             elif cons:
-                cons_str = "   ".join(f"{c['componente']}: {c['porcentaje']}%" for c in cons)
+                cons_str = _formato_consumibles(cons, self.cfg["umbral_critico"], self.cfg["umbral_alerta"])
             elif estado == "pendiente":
                 cons_str = "Pendiente de escaneo..."
             else:
