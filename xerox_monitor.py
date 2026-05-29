@@ -824,7 +824,7 @@ class DialogWebPins(ctk.CTkToplevel):
         add_frame = ctk.CTkFrame(self, fg_color="transparent")
         add_frame.pack(fill="x", padx=20, pady=(10,4))
         self._new_pin = ctk.CTkEntry(add_frame, width=160, placeholder_text="Nuevo PIN (4+ dígitos)",
-                                      fg_color=BG3, border_color=BORDER, text_color=TEXT, show="•")
+                                      fg_color=BG3, border_color=BORDER, text_color=TEXT)
         self._new_pin.pack(side="left", padx=(0,8))
         ctk.CTkButton(add_frame, text="+ Añadir", width=100, height=32,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
@@ -848,8 +848,8 @@ class DialogWebPins(ctk.CTkToplevel):
         for i, pin in enumerate(self.pins):
             row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
             row.pack(fill="x", padx=10, pady=3)
-            ctk.CTkLabel(row, text=f"{'•'*len(pin)}  ({len(pin)} dígitos)",
-                         font=("Consolas", 12), text_color=TEXT, anchor="w").pack(side="left", expand=True, anchor="w")
+            ctk.CTkLabel(row, text=pin,
+                         font=("Consolas", 13, "bold"), text_color=TEXT, anchor="w").pack(side="left", expand=True, anchor="w")
             ctk.CTkButton(row, text="Eliminar", width=80, height=26,
                           fg_color="#3d0f0f", hover_color="#5a1515", text_color=CRIT,
                           font=("Segoe UI", 10),
