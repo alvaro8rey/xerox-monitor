@@ -771,21 +771,77 @@ XSA_PATH_GENERATE   = "/properties/accounting/XSA_generate_date.php"
 XSA_PATH_DOWNLOAD   = "/properties/accounting/download_csv.php"
 
 def _xsa_descargar_csv(ip, password, usuario="admin", timeout=12):
-    """Descarga el CSV XSA vía HTTPS Basic Auth. Devuelve (texto_csv, error)."""
+    """Descarga el CSV XSA desde la web de la impresora. Devuelve (texto_csv, error)."""
     if not REQUESTS_OK:
         return None, "Instala requests:  pip install requests"
+    import re as _re, time as _time
     try:
+        base  = f"https://{ip}"
+        redir = "/properties/accounting/usageReport.php?from=Acct_Home"
+        login = f"/properties/authentication/login.php?redir={redir}"
+
         s = _requests.Session()
         s.verify  = False
-        s.auth    = (usuario, password)
         s.timeout = timeout
-        s.headers.update({"User-Agent": "Mozilla/5.0"})
-        base = f"https://{ip}"
-        s.get(base + XSA_PATH_GENERATE, allow_redirects=True)
-        r = s.get(base + XSA_PATH_DOWNLOAD, allow_redirects=True)
-        if r.status_code == 200 and len(r.content) > 50:
-            return r.text, None
-        return None, f"HTTP {r.status_code} al descargar CSV"
+        s.headers.update({
+            "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+        })
+
+        # 1. Login
+        r = s.get(base + login, allow_redirects=True)
+        csrf = (_re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text) or
+                _re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text))
+        s.post(base + "/userpost/xerox.set", allow_redirects=True,
+               headers={"Referer": base + login, "Origin": base},
+               data={"_fun_function": "HTTP_Authenticate_fn",
+                     "NextPage":      "/properties/authentication/luidLogin.php?type=&authStatus=",
+                     "frmwebUsername": usuario, "frmwebPassword": password,
+                     "frmaltDomain":  "default",
+                     "CSRFToken":     csrf.group(1) if csrf else ""})
+
+        # 2. Cargar página de contabilidad para obtener CSRF fresco
+        s.cookies.set("scnMboxSelected", "n1", domain=ip)
+        s.cookies.set("scnMboxNumNodes", "8",  domain=ip)
+        s.cookies.set("propSelected",    "n2",  domain=ip)
+        s.cookies.set("propHierarchy",   "00000001010000000000000000000000", domain=ip)
+        r = s.get(base + redir, allow_redirects=True,
+                  headers={"Referer": base + "/properties/dataManagement/autoConfiguration.php"})
+        if "login.php" in r.url:
+            return None, "Autenticación fallida — comprueba usuario y contraseña"
+
+        # 3. POST xerox.set para generar el CSV en el servidor
+        csrf2 = (_re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text) or
+                 _re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text))
+        ts = int(_time.time() * 1000)
+        s.post(f"{base}/userpost/xerox.set?ajts{ts}",
+               headers={
+                   "Referer":          base + redir,
+                   "Origin":           base,
+                   "X-Requested-With": "XMLHttpRequest",
+                   "Accept":           "application/json, text/javascript, */*; q=0.01",
+                   "Content-Type":     "application/x-www-form-urlencoded; charset=UTF-8",
+               },
+               data={"_fun_function": "HTTP_Generate_XSA_Usage_Report_fn",
+                     "CSRFToken":     csrf2.group(1) if csrf2 else "",
+                     "ShowUserId":    "TRUE",
+                     "isAjax":        "true"})
+
+        # 4. Trigger de redirect + descarga
+        _time.sleep(0.5)
+        s.get(base + XSA_PATH_GENERATE, allow_redirects=False,
+              headers={"Referer": base + redir})
+        r = s.get(base + XSA_PATH_DOWNLOAD, allow_redirects=False,
+                  headers={"Referer": base + redir,
+                           "Accept":  "text/csv,application/octet-stream,*/*;q=0.8"})
+        if r.status_code == 200 and len(r.content) > 100:
+            ct = r.headers.get("Content-Type", "")
+            cd = r.headers.get("Content-Disposition", "")
+            if ("csv" in ct or "force-download" in ct or "octet" in ct or cd or
+                    not r.text.strip().startswith("<")):
+                return r.text, None
+        return None, f"Respuesta inesperada del servidor ({r.status_code}, {len(r.content)} bytes)"
     except Exception as e:
         return None, str(e)
 
