@@ -18,13 +18,13 @@ s.verify  = False
 s.timeout = 15
 s.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
 })
 
 print(f"\n{'='*55}\n  XSA Download  |  {BASE}\n{'='*55}\n")
 
-# ── Login ─────────────────────────────────────────────────────────────────────
+# ── 1. Login ──────────────────────────────────────────────────────────────────
 r = s.get(BASE + LOGIN, allow_redirects=True)
 csrf = (re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text) or
         re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text))
@@ -35,32 +35,113 @@ s.post(BASE + "/userpost/xerox.set", allow_redirects=True,
              "frmwebUsername": USER, "frmwebPassword": PASSWORD,
              "frmaltDomain": "default",
              "CSRFToken": csrf.group(1) if csrf else ""})
+print(f"  Cookies tras login: {dict(s.cookies)}")
 
-r = s.get(BASE + REDIR, allow_redirects=True)
+# ── 2. Simular navegación completa como el browser ────────────────────────────
+# El browser establece cookies de navegación al cargar cada sección
+print("\n── Simulando navegación al panel de contabilidad...")
+
+# Cargar página principal (establece cookies de menú)
+s.get(BASE + "/properties/dataManagement/autoConfiguration.php",
+      headers={"Referer": BASE + "/"})
+print(f"  Cookies tras home: {dict(s.cookies)}")
+
+# Establecer manualmente las cookies de navegación que vimos en el browser
+s.cookies.set("scnMboxSelected",  "n1",  domain=IP)
+s.cookies.set("scnMboxNumNodes",  "8",   domain=IP)
+s.cookies.set("propSelected",     "n2",  domain=IP)
+s.cookies.set("propHierarchy",    "00000001010000000000000000000000", domain=IP)
+
+# Cargar la página de contabilidad (igual que hace el browser)
+r = s.get(BASE + REDIR, allow_redirects=True,
+          headers={"Referer": BASE + "/properties/dataManagement/autoConfiguration.php"})
 if "login.php" in r.url:
-    print("✘ Login fallido"); exit()
-print(f"✔ Sesión activa\n")
+    print("  ✘ No autenticado"); exit()
+print(f"  ✔ En página de contabilidad: {r.url}")
+print(f"  Cookies completas: {dict(s.cookies)}")
 
-# ── Generar + descargar en una sola llamada siguiendo el redirect 302 ──────────
-print("── Descargando CSV (generate → redirect → download)...")
-r = s.get(f"{BASE}/properties/accounting/XSA_generate_date.php",
-          headers={"Referer": BASE + REDIR},
-          allow_redirects=True)   # sigue el 302 → download_csv.php → CSV
+# ── 3. Paso generate: NO seguir redirect, capturar Location exacta ───────────
+print("\n── Paso 1: XSA_generate_date.php (sin seguir redirect)...")
+rg = s.get(f"{BASE}/properties/accounting/XSA_generate_date.php",
+           allow_redirects=False,
+           headers={
+               "Referer":        BASE + REDIR,
+               "Accept":         "text/html,application/xhtml+xml,*/*;q=0.8",
+               "Sec-Fetch-Dest": "document",
+               "Sec-Fetch-Mode": "navigate",
+               "Sec-Fetch-Site": "same-origin",
+               "Sec-Fetch-User": "?1",
+           })
+print(f"  [{rg.status_code}] Location: {rg.headers.get('Location','(ninguna)')}")
+print(f"  Content-Type: {rg.headers.get('Content-Type','')}")
+print(f"  Cookies tras generate: {dict(s.cookies)}")
+print(f"  Body ({len(rg.content)}b): {rg.text[:300]!r}")
+
+# Si ya devuelve el CSV aquí mismo (200 + CSV)
+if rg.status_code == 200 and len(rg.content) > 200 and not rg.text.strip().startswith("<"):
+    with open("xsa_report.csv", "wb") as f: f.write(rg.content)
+    print(f"\n  ✔ CSV en generate! Guardado: xsa_report.csv")
+    print(rg.text[:600])
+    exit()
+
+# ── 4. Paso download: seguir la Location manualmente ─────────────────────────
+loc = rg.headers.get("Location", "")
+if not loc:
+    print("\n  ✘ Sin Location — probando download_csv.php directamente...")
+    loc = "/properties/accounting/download_csv.php"
+
+# La Location puede ser relativa o absoluta
+download_url = loc if loc.startswith("http") else BASE + loc
+print(f"\n── Paso 2: GET {download_url}")
+
+import time; time.sleep(0.3)   # pequeña pausa por si el servidor necesita generar el fichero
+
+r = s.get(download_url,
+          allow_redirects=False,
+          headers={
+              "Referer":        BASE + REDIR,
+              "Accept":         "text/csv,application/octet-stream,*/*;q=0.8",
+              "Sec-Fetch-Dest": "document",
+              "Sec-Fetch-Mode": "navigate",
+              "Sec-Fetch-Site": "same-origin",
+          })
+print(f"  [{r.status_code}] URL: {r.url}")
+print(f"  Content-Type: {r.headers.get('Content-Type','')}")
+print(f"  Content-Disposition: {r.headers.get('Content-Disposition','')}")
+print(f"  Location: {r.headers.get('Location','')}")
+print(f"  Tamaño: {len(r.content):,} bytes")
+print(f"  Body[:200]: {r.text[:200]!r}")
+
+# Si hay otro redirect
+if r.status_code in (301, 302, 303):
+    loc2 = r.headers.get("Location", "")
+    download_url2 = loc2 if loc2.startswith("http") else BASE + loc2
+    print(f"\n── Paso 3: Otro redirect → {download_url2}")
+    r = s.get(download_url2, allow_redirects=False,
+              headers={"Referer": BASE + REDIR,
+                       "Accept": "text/csv,application/octet-stream,*/*;q=0.8"})
+    print(f"  [{r.status_code}] Content-Type: {r.headers.get('Content-Type','')}")
+    print(f"  Tamaño: {len(r.content):,} bytes")
+    print(f"  Body[:200]: {r.text[:200]!r}")
 
 ct = r.headers.get("Content-Type", "")
 cd = r.headers.get("Content-Disposition", "")
-print(f"  [{r.status_code}] URL final: {r.url}")
-print(f"  Content-Type: {ct}")
-print(f"  Content-Disposition: {cd}")
-print(f"  Tamaño: {len(r.content):,} bytes")
-
 es_csv = ("csv" in ct or "octet" in ct or cd or
           (len(r.content) > 200 and not r.text.strip().startswith("<")))
 
 if es_csv:
     with open("xsa_report.csv", "wb") as f:
         f.write(r.content)
-    print(f"\n✔ CSV guardado: xsa_report.csv")
-    print(f"\nPrimeras líneas:\n{r.text[:600]}")
+    print(f"\n  ✔ CSV guardado: xsa_report.csv")
+    print(f"\n  Primeras líneas:\n{r.text[:600]}")
 else:
-    print(f"\n✘ No es CSV:\n{r.text[:300]!r}")
+    print(f"\n  ✘ No es CSV.")
+
+    # ── Último recurso: POST a download_csv.php ────────────────────────────────
+    print("\n── Probando POST a download_csv.php...")
+    r3 = s.post(f"{BASE}/properties/accounting/download_csv.php",
+                allow_redirects=False,
+                headers={"Referer": BASE + REDIR},
+                data={})
+    print(f"  [{r3.status_code}] {r3.headers.get('Content-Type','')} {len(r3.content)}b")
+    print(f"  Body: {r3.text[:300]!r}")
