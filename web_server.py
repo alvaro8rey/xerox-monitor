@@ -276,7 +276,7 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 let _impData  = [];
 let _contData = [];
 let _pinUnlocked = false;
-const VALID_PINS = new Set({{ pins_json }});
+const VALID_PINS = new Set({{ pins_json | safe }});
 
 // ── PIN ───────────────────────────────────────────────────────────────────────
 function _pinUnlock() {
