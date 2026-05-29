@@ -872,12 +872,28 @@ class DialogContabilidad(ctk.CTkToplevel):
         self.focus_force()
 
         self._datos = cargar_json(CONTABILIDAD_FILE, {})
+        self._migrar_formato_antiguo()
         self._sel_impresora = "Todas"
         self._sel_mes = "Acumulado"
         self._sel_vista = "Acumulado"
         self._sort_col = None
         self._sort_rev = False
         self._build()
+
+    def _migrar_formato_antiguo(self):
+        """Convierte datos del formato viejo {ip:{ts,usuarios}} al nuevo {ip:{snapshots:{}}}."""
+        cambiado = False
+        for ip, bloque in self._datos.items():
+            if "usuarios" in bloque and "snapshots" not in bloque:
+                ts  = bloque.get("ts", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                mes = ts[:7] if ts else datetime.now().strftime("%Y-%m")
+                self._datos[ip] = {
+                    "nombre_impresora": bloque.get("nombre_impresora", ip),
+                    "snapshots": {mes: {"ts": ts, "usuarios": bloque["usuarios"]}},
+                }
+                cambiado = True
+        if cambiado:
+            guardar_json(CONTABILIDAD_FILE, self._datos)
 
     def _build(self):
         # ── Toolbar ──
