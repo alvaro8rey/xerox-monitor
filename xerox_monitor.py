@@ -951,9 +951,13 @@ class App(ctk.CTk):
         color = color_map.get(estado, OFFLINE)
         label = label_map.get(estado, "—")
 
+        # Todo el contenido dentro de un único scroll para que nada quede cortado
+        sc = ctk.CTkScrollableFrame(self.panel, fg_color="transparent")
+        sc.pack(fill="both", expand=True, padx=0, pady=0)
+
         # ── A) Imagen del dispositivo ──
-        img_frame = ctk.CTkFrame(self.panel, fg_color=BG3, corner_radius=6,
-                                  width=280, height=110)
+        img_frame = ctk.CTkFrame(sc, fg_color=BG3, corner_radius=6,
+                                  width=270, height=110)
         img_frame.pack(fill="x", padx=10, pady=(10, 4))
         img_frame.pack_propagate(False)
 
@@ -980,18 +984,18 @@ class App(ctk.CTk):
                          text_color=TEXT2).pack(pady=(0, 8))
 
         # ── B) Header: nombre + badge estado + IP ──
-        hdr = ctk.CTkFrame(self.panel, fg_color=BG3, corner_radius=6)
+        hdr = ctk.CTkFrame(sc, fg_color=BG3, corner_radius=6)
         hdr.pack(fill="x", padx=10, pady=(4, 4))
         top = ctk.CTkFrame(hdr, fg_color="transparent")
         top.pack(fill="x", padx=10, pady=(8, 2))
         ctk.CTkLabel(top, text=imp["nombre"], font=("Segoe UI", 12, "bold"),
-                     text_color=TEXT, wraplength=200, justify="left").pack(side="left", anchor="w")
+                     text_color=TEXT, wraplength=170, justify="left").pack(side="left", anchor="w")
         ctk.CTkLabel(top, text=f"● {label}", font=("Segoe UI", 10, "bold"),
                      text_color=color).pack(side="right")
         ctk.CTkLabel(hdr, text=ip, font=("Consolas", 10), text_color=TEXT2).pack(anchor="w", padx=10, pady=(0, 8))
 
         # ── C) Botones de acción rápida ──
-        acc = ctk.CTkFrame(self.panel, fg_color="transparent")
+        acc = ctk.CTkFrame(sc, fg_color="transparent")
         acc.pack(fill="x", padx=10, pady=(2, 4))
         ctk.CTkButton(acc, text="🌐 Web", width=80, height=28,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
@@ -1001,25 +1005,28 @@ class App(ctk.CTk):
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
                       command=self._refrescar_sel).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(acc, text="↓ CSV", width=80, height=28,
+        ctk.CTkButton(acc, text="↓ CSV", width=70, height=28,
                       fg_color=BG3, hover_color=BORDER, text_color=TEXT,
                       font=("Segoe UI", 10),
                       command=lambda: self._exportar_csv(ip)).pack(side="left")
 
-        # Info rows helper
+        # Helpers anclados al scroll
         def fila(lbl, val):
-            f = ctk.CTkFrame(self.panel, fg_color="transparent")
+            f = ctk.CTkFrame(sc, fg_color="transparent")
             f.pack(fill="x", padx=14, pady=1)
             ctk.CTkLabel(f, text=lbl, font=("Segoe UI", 10), text_color=TEXT2, width=75, anchor="w").pack(side="left")
-            ctk.CTkLabel(f, text=val, font=("Segoe UI", 10, "bold"), text_color=TEXT, anchor="w", wraplength=175).pack(side="left")
+            ctk.CTkLabel(f, text=val, font=("Segoe UI", 10, "bold"), text_color=TEXT, anchor="w", wraplength=165).pack(side="left")
 
         def sep_line():
-            ctk.CTkFrame(self.panel, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x", padx=10, pady=(6, 2))
+            ctk.CTkFrame(sc, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x", padx=10, pady=(6, 2))
+
+        def seccion(titulo):
+            ctk.CTkLabel(sc, text=titulo, font=("Segoe UI", 8, "bold"),
+                         text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
 
         # ── D) Sección INFORMACIÓN ──
         sep_line()
-        ctk.CTkLabel(self.panel, text="INFORMACIÓN", font=("Segoe UI", 8, "bold"),
-                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
+        seccion("INFORMACIÓN")
         fila("Ubicación:", imp.get("ubicacion", "") or "—")
         fila("Comunidad:", imp.get("comunidad", "") or self.cfg["comunidad_snmp"])
         fila("Lectura:",   ts.strftime("%H:%M:%S") if ts else "—")
@@ -1028,8 +1035,7 @@ class App(ctk.CTk):
         info = cache.get("info", {})
         if info:
             sep_line()
-            ctk.CTkLabel(self.panel, text="DISPOSITIVO", font=("Segoe UI", 8, "bold"),
-                         text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
+            seccion("DISPOSITIVO")
             if info.get("modelo"):
                 fila("Modelo:", info["modelo"][:35])
             if info.get("sys_nombre"):
@@ -1054,34 +1060,32 @@ class App(ctk.CTk):
 
         # ── F) Sección CONSUMIBLES con barras ──
         sep_line()
-        ctk.CTkLabel(self.panel, text="CONSUMIBLES", font=("Segoe UI", 8, "bold"),
-                     text_color=TEXT2).pack(anchor="w", padx=14, pady=(2, 2))
-
-        scroll = ctk.CTkScrollableFrame(self.panel, fg_color="transparent", height=260)
-        scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        seccion("CONSUMIBLES")
 
         if error:
-            ctk.CTkLabel(scroll, text=f"⚠  {error}", font=("Segoe UI", 10),
-                         text_color=WARN, wraplength=240, justify="left").pack(anchor="w", pady=6)
+            ctk.CTkLabel(sc, text=f"⚠  {error}", font=("Segoe UI", 10),
+                         text_color=WARN, wraplength=240, justify="left").pack(anchor="w", padx=14, pady=6)
         elif cons:
             for c in cons:
                 pct = c["porcentaje"]
                 bc  = CRIT if pct<=self.cfg["umbral_critico"] else WARN if pct<=self.cfg["umbral_alerta"] else OK
-                ctk.CTkLabel(scroll, text=c["componente"], font=("Segoe UI", 10),
-                             text_color=TEXT, anchor="w").pack(fill="x", pady=(6, 0))
-                bar_bg = ctk.CTkFrame(scroll, fg_color=BG3, height=10, corner_radius=5)
-                bar_bg.pack(fill="x", pady=(2, 0))
+                ctk.CTkLabel(sc, text=c["componente"], font=("Segoe UI", 10),
+                             text_color=TEXT, anchor="w").pack(fill="x", padx=14, pady=(6, 0))
+                bar_bg = ctk.CTkFrame(sc, fg_color=BG3, height=10, corner_radius=5)
+                bar_bg.pack(fill="x", padx=14, pady=(2, 0))
                 bar_bg.pack_propagate(False)
                 if pct > 0:
                     ctk.CTkFrame(bar_bg, fg_color=bc, height=10, corner_radius=5,
-                                 width=int(pct/100*240)).place(x=0, y=0, relheight=1)
-                row_pct = ctk.CTkFrame(scroll, fg_color="transparent")
-                row_pct.pack(fill="x")
+                                 width=int(pct/100*230)).place(x=0, y=0, relheight=1)
+                row_pct = ctk.CTkFrame(sc, fg_color="transparent")
+                row_pct.pack(fill="x", padx=14)
                 ctk.CTkLabel(row_pct, text=f"{pct}%", font=("Segoe UI", 9, "bold"),
                              text_color=bc).pack(side="right")
         else:
-            ctk.CTkLabel(scroll, text="Sin datos disponibles", text_color=TEXT2,
-                         font=("Segoe UI", 10)).pack(anchor="w", pady=6)
+            ctk.CTkLabel(sc, text="Sin datos disponibles", text_color=TEXT2,
+                         font=("Segoe UI", 10)).pack(anchor="w", padx=14, pady=6)
+        # Espaciado final para que el último elemento no quede pegado al borde
+        ctk.CTkFrame(sc, fg_color="transparent", height=10).pack()
 
     # ── TABLA ─────────────────────────────────────────────────────────────────
     def _poblar_tabla(self):
