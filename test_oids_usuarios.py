@@ -1,119 +1,136 @@
 """
-Test SNMP Xerox - diagnóstico completo de OIDs con datos.
+SNMP Full Walk - explora todos los OIDs del dispositivo y exporta a txt.
 Uso: python test_oids_usuarios.py
 """
-import asyncio
+import asyncio, datetime, os
 from pysnmp.hlapi.v1arch.asyncio import (
     SnmpDispatcher, CommunityData, UdpTransportTarget,
-    ObjectType, ObjectIdentity, get_cmd
+    ObjectType, ObjectIdentity, next_cmd
 )
 
 IP        = "10.55.161.248"
 COMUNIDAD = "public"
 TIMEOUT   = 2.0
+OUT_FILE  = f"snmp_walk_{IP.replace('.','_')}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
-# Ramas a explorar en busca de OIDs con datos reales
-RAMAS = [
-    # Xerox propietario - contabilidad
-    ("Xerox accounting .8.53",    "1.3.6.1.4.1.253.8.53",    30, 5),
-    ("Xerox accounting .8.61",    "1.3.6.1.4.1.253.8.61",    30, 5),
-    ("Xerox accounting .8.62",    "1.3.6.1.4.1.253.8.62",    30, 5),
-    # Job Monitoring MIB (RFC 2707) - estándar, a veces implementado
-    ("Job Monitor MIB",           "1.3.6.1.4.1.2699.1.1",    20, 5),
-    # Xerox MIB raíz
-    ("Xerox root .8.51",          "1.3.6.1.4.1.253.8.51",    20, 5),
-    ("Xerox root .8.52",          "1.3.6.1.4.1.253.8.52",    20, 5),
-    ("Xerox root .8.56",          "1.3.6.1.4.1.253.8.56",    20, 5),
-    ("Xerox root .8.57",          "1.3.6.1.4.1.253.8.57",    20, 5),
-    # HR MIB - contadores de trabajos
-    ("hrStorage",                 "1.3.6.1.2.1.25.2.3.1",    10, 5),
-    ("prtInterpreter",            "1.3.6.1.2.1.43.15.1.1",   10, 5),
-    ("prtChannel",                "1.3.6.1.2.1.43.14.1.1",   10, 5),
-    ("prtJob (si existe)",        "1.3.6.1.2.1.43.13.1.1",   10, 5),
+# Árboles a explorar en orden
+ARBOLES = [
+    ("MIB-II estándar",            "1.3.6.1.2.1"),
+    ("Xerox Enterprise",           "1.3.6.1.4.1.253"),
+    ("Job Monitoring MIB",         "1.3.6.1.4.1.2699"),
+    ("Host Resources MIB extra",   "1.3.6.1.2.1.25"),
 ]
 
-async def walk_rama(dispatcher, transport, base_oid, max_sub, max_idx):
-    """
-    Walk 2D: prueba base.sub.idx para sub en 1..max_sub, idx en 1..max_idx.
-    Devuelve lista de (oid_completo, tipo, valor) con datos reales.
-    """
-    encontrados = []
-    for sub in range(1, max_sub + 1):
-        for idx in range(1, max_idx + 1):
-            oid = f"{base_oid}.{sub}.{idx}"
-            try:
-                errI, errS, _, vb = await get_cmd(
-                    dispatcher, CommunityData(COMUNIDAD), transport,
-                    ObjectType(ObjectIdentity(oid))
-                )
-                if errI or errS:
-                    continue
-                for _, val in vb:
-                    tipo = type(val).__name__
-                    v = str(val)
-                    if "No Such" in v or "End of" in v:
-                        continue
-                    if v.strip():  # solo si tiene valor no vacío
-                        encontrados.append((oid, tipo, v))
-            except Exception:
-                pass
-    return encontrados
+async def snmp_walk(dispatcher, transport, base_oid, lineas, max_oids=5000):
+    """Walk GETNEXT desde base_oid. Devuelve nº de OIDs encontrados."""
+    current_oid = base_oid
+    count = 0
+
+    while count < max_oids:
+        try:
+            errI, errS, _, vb = await next_cmd(
+                dispatcher, CommunityData(COMUNIDAD), transport,
+                ObjectType(ObjectIdentity(current_oid))
+            )
+        except Exception as e:
+            lineas.append(f"  [EXCEPCIÓN] {e}")
+            break
+
+        if errI or errS:
+            break
+
+        if not vb:
+            break
+
+        oid_obj, val = vb[0]
+        oid_str = str(oid_obj)
+
+        # Parar si salimos del árbol base
+        if not oid_str.startswith(base_oid):
+            break
+
+        tipo = type(val).__name__
+        valor = str(val)
+
+        # Filtrar no-such y end-of
+        if "No Such" in valor or "End of" in valor:
+            break
+
+        lineas.append(f"  {oid_str}")
+        lineas.append(f"    tipo={tipo}  valor={valor!r}")
+
+        current_oid = oid_str
+        count += 1
+
+    return count
 
 async def main():
-    print(f"\n{'='*65}")
-    print(f"  Diagnóstico SNMP Xerox - búsqueda de OIDs con datos")
-    print(f"  IP: {IP}  |  Comunidad: {COMUNIDAD}")
-    print(f"{'='*65}\n")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lineas = []
+    lineas.append("=" * 70)
+    lineas.append(f"  SNMP Full Walk  |  IP: {IP}  |  Comunidad: {COMUNIDAD}")
+    lineas.append(f"  Fecha: {ts}")
+    lineas.append("=" * 70)
+
+    print(f"\n{'='*70}")
+    print(f"  SNMP Full Walk  |  IP: {IP}")
+    print(f"  Salida → {OUT_FILE}")
+    print(f"{'='*70}\n")
 
     dispatcher = SnmpDispatcher()
     try:
-        transport = await UdpTransportTarget.create((IP, 161), timeout=TIMEOUT, retries=0)
+        transport = await UdpTransportTarget.create(
+            (IP, 161), timeout=TIMEOUT, retries=1)
     except Exception as e:
         print(f"[ERROR] No se pudo conectar: {e}")
         return
 
-    # Verificar conectividad básica
+    # Verificar conectividad
+    from pysnmp.hlapi.v1arch.asyncio import get_cmd
     errI, errS, _, vb = await get_cmd(
         dispatcher, CommunityData(COMUNIDAD), transport,
-        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.5.0"))
+        ObjectType(ObjectIdentity("1.3.6.1.2.1.1.1.0"))
     )
     for _, val in vb:
-        print(f"  Dispositivo: {val}\n")
+        v = str(val)
+        if "No Such" not in v:
+            lineas.append(f"\n  sysDescr: {v}")
+            print(f"  Dispositivo: {v[:70]}\n")
 
-    total_encontrados = 0
+    total = 0
+    for nombre, base in ARBOLES:
+        print(f"  Explorando {nombre} ({base})...", flush=True)
+        lineas.append(f"\n{'─'*70}")
+        lineas.append(f"  {nombre}  ({base})")
+        lineas.append(f"{'─'*70}")
 
-    for nombre, base, max_sub, max_idx in RAMAS:
-        print(f"── {nombre} ({base}) ", end="", flush=True)
-        resultados = await walk_rama(dispatcher, transport, base, max_sub, max_idx)
-        if resultados:
-            print(f"→ {len(resultados)} OIDs con datos:")
-            for oid, tipo, val in resultados:
-                print(f"    {oid}")
-                print(f"      tipo={tipo}  valor={val!r}")
-            total_encontrados += len(resultados)
-        else:
-            print("→ sin datos")
+        n = await snmp_walk(dispatcher, transport, base, lineas)
+        total += n
+        resumen = f"→ {n} OIDs" if n > 0 else "→ sin respuesta"
+        print(f"    {resumen}")
+        lineas.append(f"  [subtotal: {n} OIDs]\n")
 
-    print(f"\n{'='*65}")
-    print(f"  Total OIDs con datos encontrados: {total_encontrados}")
+    lineas.append("=" * 70)
+    lineas.append(f"  TOTAL OIDs encontrados: {total}")
+    lineas.append("=" * 70)
 
-    if total_encontrados == 0:
-        print("""
-  DIAGNÓSTICO: La impresora no expone contadores por usuario vía SNMP.
+    # Escribir archivo
+    with open(OUT_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lineas))
 
-  Posibles causas:
-    1. Network Accounting desactivado en la impresora.
-       → Entrar al panel web (http://10.55.161.248) como admin
-         → Propiedades → Contabilidad → Activar "Network Accounting"
-         → Crear usuarios con sus cuotas
+    print(f"\n  Total: {total} OIDs")
+    print(f"  Archivo guardado: {os.path.abspath(OUT_FILE)}\n")
 
-    2. Los datos requieren SNMPv3 con autenticación (no community public).
-       → Habría que configurar un usuario SNMPv3 en la impresora.
-
-    3. Esta impresora no implementa contabilidad por usuario vía SNMP.
-       → Alternativa: scraping del panel web con requests+BeautifulSoup.
-""")
-    print(f"{'='*65}\n")
+    # Mostrar en consola solo los OIDs interesantes (Xerox + no estándar)
+    xerox_lines = [l for l in lineas if "253" in l or "2699" in l]
+    if xerox_lines:
+        print("─" * 70)
+        print("  OIDs Xerox/Job con datos (resumen en pantalla):")
+        print("─" * 70)
+        for l in xerox_lines[:80]:
+            print(l)
+        if len(xerox_lines) > 80:
+            print(f"  ... ({len(xerox_lines)-80} líneas más en el archivo)")
 
 if __name__ == "__main__":
     asyncio.run(main())
