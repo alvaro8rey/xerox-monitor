@@ -102,7 +102,7 @@ DEFAULT_CONFIG = {
     "xsa_password":   "",
     "xsa_autodownload": True,
     "xsa_ultimo_mes": "",   # "YYYY-MM" del último autodownload
-    "web_pins": ["2026"],
+    "web_pins": [{"pin": "2026", "nombre": ""}],
 }
 
 # ── PALETA ────────────────────────────────────────────────────────────────────
@@ -799,44 +799,67 @@ class DialogImpresora(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 class DialogWebPins(ctk.CTkToplevel):
     """Gestión de PINs de acceso al servidor web."""
+
+    def _normalizar(self, raw):
+        """Convierte cualquier formato antiguo (lista de strings) al nuevo (lista de dicts)."""
+        result = []
+        for p in raw:
+            if isinstance(p, dict):
+                result.append({"pin": str(p.get("pin","")), "nombre": p.get("nombre","")})
+            else:
+                result.append({"pin": str(p), "nombre": ""})
+        return result
+
     def __init__(self, parent, cfg):
         super().__init__(parent)
         self.cfg  = cfg
-        self.pins = list(cfg.get("web_pins", ["2026"]))
+        self.pins = self._normalizar(cfg.get("web_pins", [{"pin":"2026","nombre":""}]))
         self.title("Acceso web — PINs")
-        self.geometry("340x420")
+        self.geometry("480x460")
         self.resizable(False, False)
         self.configure(fg_color=BG2)
         self.grab_set(); self.lift(); self.focus_force()
 
         ctk.CTkLabel(self, text="PINs de acceso al servidor web",
                      font=("Segoe UI", 13, "bold"), text_color=TEXT).pack(pady=(20,4))
-        ctk.CTkLabel(self, text="Cualquiera de estos PINs permite el acceso.\nMínimo 4 dígitos, solo números.",
-                     font=("Segoe UI", 11), text_color=TEXT2, justify="center").pack(pady=(0,12))
+        ctk.CTkLabel(self, text="Cada PIN puede tener un nombre asociado (opcional).",
+                     font=("Segoe UI", 11), text_color=TEXT2).pack(pady=(0,10))
 
-        # Lista de PINs
+        # Cabecera columnas
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill="x", padx=20)
+        ctk.CTkLabel(hdr, text="PIN", font=("Segoe UI", 10), text_color=TEXT2,
+                     width=90, anchor="w").pack(side="left", padx=(10,0))
+        ctk.CTkLabel(hdr, text="Nombre (opcional)", font=("Segoe UI", 10),
+                     text_color=TEXT2, anchor="w").pack(side="left", padx=(8,0))
+
         list_frame = ctk.CTkFrame(self, fg_color=BG3, corner_radius=8)
-        list_frame.pack(fill="both", expand=True, padx=20, pady=0)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=(4,0))
         self._list_frame = list_frame
         self._render_list()
 
-        # Añadir PIN
+        # Fila para añadir nuevo
         add_frame = ctk.CTkFrame(self, fg_color="transparent")
-        add_frame.pack(fill="x", padx=20, pady=(10,4))
-        self._new_pin = ctk.CTkEntry(add_frame, width=160, placeholder_text="Nuevo PIN (4+ dígitos)",
+        add_frame.pack(fill="x", padx=20, pady=(10,2))
+        self._new_pin = ctk.CTkEntry(add_frame, width=90, placeholder_text="PIN",
                                       fg_color=BG3, border_color=BORDER, text_color=TEXT)
-        self._new_pin.pack(side="left", padx=(0,8))
-        ctk.CTkButton(add_frame, text="+ Añadir", width=100, height=32,
+        self._new_pin.pack(side="left", padx=(0,6))
+        self._new_nombre = ctk.CTkEntry(add_frame, width=200, placeholder_text="Nombre (opcional)",
+                                         fg_color=BG3, border_color=BORDER, text_color=TEXT)
+        self._new_nombre.pack(side="left", padx=(0,8))
+        ctk.CTkButton(add_frame, text="+ Añadir", width=90, height=32,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
                       font=("Segoe UI", 11), command=self._add_pin).pack(side="left")
+
         self._err = ctk.CTkLabel(self, text="", text_color=CRIT, font=("Segoe UI", 10))
         self._err.pack(pady=(2,0))
 
         ctk.CTkButton(self, text="✔  Guardar y cerrar", width=200, height=36,
                       fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
-                      font=("Segoe UI", 12, "bold"), command=self._guardar).pack(pady=(10,20))
+                      font=("Segoe UI", 12, "bold"), command=self._guardar).pack(pady=(8,18))
 
-        self._new_pin.bind("<Return>", lambda e: self._add_pin())
+        self._new_pin.bind("<Return>", lambda e: self._new_nombre.focus())
+        self._new_nombre.bind("<Return>", lambda e: self._add_pin())
 
     def _render_list(self):
         for w in self._list_frame.winfo_children():
@@ -845,27 +868,33 @@ class DialogWebPins(ctk.CTkToplevel):
             ctk.CTkLabel(self._list_frame, text="Sin PINs configurados",
                          text_color=TEXT2, font=("Segoe UI", 11)).pack(pady=20)
             return
-        for i, pin in enumerate(self.pins):
+        for i, p in enumerate(self.pins):
             row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
-            row.pack(fill="x", padx=10, pady=3)
-            ctk.CTkLabel(row, text=pin,
-                         font=("Consolas", 13, "bold"), text_color=TEXT, anchor="w").pack(side="left", expand=True, anchor="w")
+            row.pack(fill="x", padx=10, pady=4)
+            ctk.CTkLabel(row, text=p["pin"], font=("Consolas", 13, "bold"),
+                         text_color=TEXT, width=90, anchor="w").pack(side="left")
+            nombre_lbl = p["nombre"] if p["nombre"] else "—"
+            ctk.CTkLabel(row, text=nombre_lbl, font=("Segoe UI", 11),
+                         text_color=TEXT if p["nombre"] else TEXT2,
+                         anchor="w").pack(side="left", expand=True, padx=(8,0))
             ctk.CTkButton(row, text="Eliminar", width=80, height=26,
                           fg_color="#3d0f0f", hover_color="#5a1515", text_color=CRIT,
                           font=("Segoe UI", 10),
                           command=lambda idx=i: self._remove_pin(idx)).pack(side="right")
 
     def _add_pin(self):
-        val = self._new_pin.get().strip()
+        val    = self._new_pin.get().strip()
+        nombre = self._new_nombre.get().strip()
         if not val.isdigit():
             self._err.configure(text="Solo se permiten dígitos."); return
         if len(val) < 4:
             self._err.configure(text="Mínimo 4 dígitos."); return
-        if val in self.pins:
+        if any(p["pin"] == val for p in self.pins):
             self._err.configure(text="Ese PIN ya existe."); return
         self._err.configure(text="")
-        self.pins.append(val)
+        self.pins.append({"pin": val, "nombre": nombre})
         self._new_pin.delete(0, "end")
+        self._new_nombre.delete(0, "end")
         self._render_list()
 
     def _remove_pin(self, idx):

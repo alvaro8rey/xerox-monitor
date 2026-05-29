@@ -245,6 +245,7 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
   <span style="font-size:20px">🖨</span>
   <h1>Fleet Monitor Pro</h1>
   <div style="display:flex;gap:8px" id="kpi-badges"></div>
+  <span id="user-label" style="color:#8b92b8;font-size:12px"></span>
   <span class="ts" id="last-update"></span>
 </header>
 
@@ -276,21 +277,27 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 let _impData  = [];
 let _contData = [];
 let _pinUnlocked = false;
-const VALID_PINS = new Set({{ pins_json | safe }});
+const PIN_ENTRIES = {{ pins_json | safe }};   // [{pin, nombre}, ...]
+const PIN_MAP = {};  // pin → nombre
+PIN_ENTRIES.forEach(e => PIN_MAP[e.pin] = e.nombre);
 
 // ── PIN ───────────────────────────────────────────────────────────────────────
-function _pinUnlock() {
+function _pinUnlock(pin) {
   _pinUnlocked = true;
   document.getElementById('pin-overlay').classList.remove('show');
   document.body.classList.remove('locked');
+  const nombre = PIN_MAP[pin] || '';
+  if (nombre) {
+    document.getElementById('user-label').textContent = '👤 ' + nombre;
+  }
   loadImpresoras();
   loadContabilidad();
 }
 
 function _tryPin() {
   var val = document.getElementById('pin-input').value;
-  if (VALID_PINS.has(val)) {
-    _pinUnlock();
+  if (PIN_MAP.hasOwnProperty(val)) {
+    _pinUnlock(val);
   }
 }
 
@@ -316,11 +323,11 @@ function e_pad(ev, k) {
 }
 
 // Teclado físico: input event (cada tecla) + Enter
-document.getElementById('pin-input').addEventListener('input',   _tryPin);
+document.getElementById('pin-input').addEventListener('input', _tryPin);
 document.getElementById('pin-input').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') {
     var val = document.getElementById('pin-input').value;
-    if (VALID_PINS.has(val)) _pinUnlock(); else if (val) _pinWrong();
+    if (PIN_MAP.hasOwnProperty(val)) _pinUnlock(val); else if (val) _pinWrong();
   }
 });
 
@@ -557,12 +564,22 @@ setInterval(() => { if (_pinUnlocked) loadImpresoras(); }, 30000);
 
 @app.route("/")
 def index():
-    cfg  = _load(CONFIG_FILE, {})
-    pins = cfg.get("web_pins", ["2026"])
-    # Sanitize: solo strings de dígitos
-    pins = [str(p) for p in pins if str(p).isdigit()] or ["2026"]
     import json as _json
-    return render_template_string(HTML, pins_json=_json.dumps(pins))
+    cfg  = _load(CONFIG_FILE, {})
+    raw  = cfg.get("web_pins", [{"pin": "2026", "nombre": ""}])
+    # Normalizar: acepta formato antiguo (lista de strings) y nuevo (lista de dicts)
+    entries = []
+    for p in raw:
+        if isinstance(p, dict):
+            pin    = str(p.get("pin", "")).strip()
+            nombre = str(p.get("nombre", "")).strip()
+        else:
+            pin, nombre = str(p).strip(), ""
+        if pin.isdigit() and len(pin) >= 4:
+            entries.append({"pin": pin, "nombre": nombre})
+    if not entries:
+        entries = [{"pin": "2026", "nombre": ""}]
+    return render_template_string(HTML, pins_json=_json.dumps(entries))
 
 
 if __name__ == "__main__":
