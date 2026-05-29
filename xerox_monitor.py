@@ -1235,13 +1235,23 @@ class DialogContabilidad(ctk.CTkToplevel):
         "fax images": "fax",
     }
 
+    _EXCLUIR_USUARIOS = {u.lower() for u in (
+        "System User", "CUENTA GENERAL", "Customer Service Engineer Account",
+        "Xerox Administrative Group", "Admin", "Diagnostics", "Local System User",
+        "Print Exceptions Group", "10.55.161.196", "Guest",
+        "IPP Exception Group", "IPP Exception User",
+    )}
+
     def _procesar_filas(self, filas_raw):
         def norm(k): return self._MAP_COLS.get(k.lower().strip(), k.lower().strip())
         resultado = []
         for fila in filas_raw:
             row = {norm(k): (v or "").strip() for k, v in fila.items()}
-            # Ignorar filas de totales o vacías
-            if not row.get("usuario") or row.get("tipo", "").lower() in ("total", "totales", "system"):
+            nombre = row.get("usuario", "")
+            # Ignorar filas de totales, vacías o usuarios del sistema
+            if (not nombre
+                    or row.get("tipo", "").lower() in ("total", "totales", "system")
+                    or nombre.lower() in self._EXCLUIR_USUARIOS):
                 continue
             def safe_int(k):
                 try: return int(row.get(k, "0").replace(",","").replace(".","") or 0)
@@ -1396,7 +1406,11 @@ class DialogContabilidad(ctk.CTkToplevel):
         else:
             self._sort_col = col
             self._sort_rev = False
-        rows = [(self.tree.set(k, col), k) for k in self.tree.get_children()]
+        all_items = self.tree.get_children()
+        # Separar fila TOTAL (siempre al final)
+        total_items = [k for k in all_items if "totales" in self.tree.item(k, "tags")]
+        sort_items  = [k for k in all_items if k not in total_items]
+        rows = [(self.tree.set(k, col), k) for k in sort_items]
         try:
             rows.sort(key=lambda x: int(x[0]) if x[0] not in ("—","") else -1,
                       reverse=self._sort_rev)
@@ -1404,6 +1418,8 @@ class DialogContabilidad(ctk.CTkToplevel):
             rows.sort(reverse=self._sort_rev)
         for i, (_, k) in enumerate(rows):
             self.tree.move(k, "", i)
+        for k in total_items:
+            self.tree.move(k, "", "end")
 
 
 class _DialogCredencialesXSA(ctk.CTkToplevel):
