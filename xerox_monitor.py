@@ -1578,8 +1578,15 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Fleet Monitor Pro")
         self.geometry("1280x720")
-        self.after(0, lambda: self.state("zoomed"))
         self.minsize(960, 560)
+        # Maximizar: zoomed (Windows/Linux), wm_attributes fallback
+        try:
+            self.after(100, lambda: self.wm_state("zoomed"))
+        except Exception:
+            try:
+                self.after(100, lambda: self.wm_attributes("-zoomed", True))
+            except Exception:
+                pass
         self.configure(fg_color=BG)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
