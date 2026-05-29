@@ -1,8 +1,8 @@
 """
-Debug del formulario de login Xerox AltaLink C8170.
+Descarga CSV XSA Xerox AltaLink C8170.
 Uso: python test_web_accounting.py
 """
-import requests, re
+import requests, re, time
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
@@ -19,79 +19,73 @@ s.timeout = 15
 s.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9",
+    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8",
 })
 
-print(f"\n{'='*60}\n  Debug login  |  {BASE}\n{'='*60}\n")
+print(f"\n{'='*60}\n  XSA Download  |  {BASE}\n{'='*60}\n")
 
-# ── 1. GET login page ─────────────────────────────────────────────────────────
+# ── 1. GET login para obtener CSRFToken ───────────────────────────────────────
+print("── Paso 1: GET login...")
 r = s.get(BASE + LOGIN, allow_redirects=True)
-print(f"[{r.status_code}] GET login.php  → {r.url}")
+print(f"  [{r.status_code}] → {r.url}")
 
-# Extraer TODOS los inputs del form
-all_inputs = re.findall(
-    r'<input([^>]*)>', r.text, re.I | re.S)
-print("\n── Todos los <input> del formulario:")
-form_data = {}
-for inp in all_inputs:
-    name  = re.search(r'name=["\']([^"\']*)["\']',  inp, re.I)
-    value = re.search(r'value=["\']([^"\']*)["\']', inp, re.I)
-    type_ = re.search(r'type=["\']([^"\']*)["\']',  inp, re.I)
-    if name:
-        n = name.group(1)
-        v = value.group(1) if value else ""
-        t = type_.group(1) if type_ else "text"
-        print(f"  name={n!r:<30} type={t:<10} value={v[:60]!r}")
-        form_data[n] = v
+csrf = (re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text) or
+        re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text))
+csrf_token = csrf.group(1) if csrf else ""
+print(f"  CSRFToken: {csrf_token[:20]}...")
 
-# Extraer action del form
-form_action = re.search(r'<form[^>]*action=["\']([^"\']*)["\']', r.text, re.I)
-print(f"\n── Form action: {form_action.group(1) if form_action else 'NO ENCONTRADO'}")
+# ── 2. POST login con campos exactos capturados del navegador ─────────────────
+print("\n── Paso 2: POST login...")
+payload = {
+    "_fun_function":  "HTTP_Authenticate_fn",   # valor exacto del browser
+    "NextPage":       "/properties/authentication/luidLogin.php?type=&authStatus=",
+    "frmwebUsername": USER,
+    "frmwebPassword": PASSWORD,
+    "frmaltDomain":   "default",                # valor exacto del browser
+    "CSRFToken":      csrf_token,
+}
+r = s.post(BASE + "/userpost/xerox.set", data=payload,
+           headers={"Referer": BASE + LOGIN, "Origin": BASE},
+           allow_redirects=True)
+print(f"  [{r.status_code}] → {r.url}")
+print(f"  Cookies: {dict(s.cookies)}")
 
-# ── 2. Construir payload completo con todos los campos ────────────────────────
-# Sobreescribir los campos de credenciales
-form_data["frmwebUsername"] = USER
-form_data["frmwebPassword"] = PASSWORD
-# Forzar NextPage correcto
-form_data["NextPage"]       = REDIR
+autenticado = "authStatus=0" not in r.url and "login.php" not in r.url
+print(f"  Login: {'✔ OK' if autenticado else '✘ FALLÓ — ' + r.url}")
 
-print(f"\n── Payload completo a enviar:")
-for k, v in form_data.items():
-    val_display = v[:80] if k != "frmwebPassword" else "***"
-    print(f"  {k:<30} = {val_display!r}")
+# ── 3. Navegar a usageReport para verificar sesión ───────────────────────────
+print("\n── Paso 3: verificando sesión...")
+r = s.get(BASE + REDIR, headers={"Referer": BASE + "/"}, allow_redirects=True)
+print(f"  [{r.status_code}] → {r.url}")
+sesion_ok = "login.php" not in r.url
+print(f"  Sesión: {'✔ activa' if sesion_ok else '✘ no autenticado'}")
 
-# ── 3. POST ───────────────────────────────────────────────────────────────────
-action = form_action.group(1) if form_action else "/userpost/xerox.set"
-if not action.startswith("http"):
-    action = BASE + action
+if not sesion_ok:
+    print("\n  Login fallido. Revisa usuario/contraseña.")
+    exit()
 
-print(f"\n── POST → {action}")
-r2 = s.post(action, data=form_data,
-            headers={"Referer": BASE + LOGIN,
-                     "Origin":  BASE},
-            allow_redirects=True)
-print(f"[{r2.status_code}] URL final: {r2.url}")
-print(f"Cookies: {dict(s.cookies)}")
-print(f"Respuesta completa ({len(r2.text)} bytes):\n{r2.text[:500]!r}")
+# ── 4. Generar informe ────────────────────────────────────────────────────────
+print("\n── Paso 4: generando informe XSA...")
+r = s.get(BASE + "/properties/accounting/XSA_generate_date.php",
+          headers={"Referer": BASE + REDIR}, allow_redirects=True)
+print(f"  [{r.status_code}] XSA_generate_date.php  ({len(r.content):,} bytes)")
 
-# ── 4. Verificar sesión ───────────────────────────────────────────────────────
-print(f"\n── Verificando sesión...")
-r3 = s.get(BASE + REDIR, headers={"Referer": BASE + "/"})
-print(f"[{r3.status_code}] → {r3.url}")
-if "login.php" not in r3.url:
-    print("✔  AUTENTICADO — intentando descargar CSV...")
-    s.get(BASE + "/properties/accounting/XSA_generate_date.php",
-          headers={"Referer": BASE + REDIR})
-    r4 = s.get(BASE + "/properties/accounting/download_csv.php",
-               headers={"Referer": BASE + REDIR})
-    print(f"[{r4.status_code}] download_csv — {r4.headers.get('Content-Type','')} — {len(r4.content)} bytes")
-    if not r4.text.strip().startswith("<"):
-        with open("xsa_report.csv","wb") as f: f.write(r4.content)
-        print(f"✔  CSV guardado: {r4.text[:400]}")
-    else:
-        print(f"Sigue siendo HTML: {r4.text[:200]!r}")
+# ── 5. Descargar CSV ──────────────────────────────────────────────────────────
+print("\n── Paso 5: descargando CSV...")
+r = s.get(BASE + "/properties/accounting/download_csv.php",
+          headers={"Referer": BASE + REDIR}, allow_redirects=True)
+ct = r.headers.get("Content-Type", "")
+cd = r.headers.get("Content-Disposition", "")
+print(f"  [{r.status_code}] {len(r.content):,} bytes")
+print(f"  Content-Type: {ct}")
+print(f"  Content-Disposition: {cd}")
+
+es_csv = not r.text.strip().startswith("<") or "csv" in ct or cd
+if es_csv and len(r.content) > 50:
+    with open("xsa_report.csv", "wb") as f:
+        f.write(r.content)
+    print(f"\n  ✔ CSV guardado: xsa_report.csv")
+    print(f"\n  Primeras líneas:\n{r.text[:600]}")
 else:
-    print("✘  Sigue sin autenticar.")
-    print("\n>>> ACCIÓN NECESARIA: abre F12 → Red en el navegador, inicia")
-    print(">>> sesión manualmente y busca POST /userpost/xerox.set.")
-    print(">>> Copia todos los campos del payload y compártelos.")
+    print(f"\n  ✘ Devuelve HTML, no CSV.")
+    print(f"  Primeras líneas: {r.text[:200]!r}")
