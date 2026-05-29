@@ -139,13 +139,16 @@ def cargar_impresoras():
             out.append({**item, "imagen": item.get("imagen", "")})
     return out
 
-def guardar_historial(ip, consumibles):
+def guardar_historial(ip, consumibles, nombre=None):
     with _historial_lock:
         h = cargar_json(HISTORIAL_FILE, {})
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if ip not in h:
             h[ip] = []
-        h[ip].append({"ts": ts, "consumibles": consumibles})
+        entry = {"ts": ts, "consumibles": consumibles}
+        if nombre:
+            entry["nombre"] = nombre
+        h[ip].append(entry)
         h[ip] = h[ip][-100:]
         guardar_json(HISTORIAL_FILE, h)
 
@@ -2371,7 +2374,7 @@ class App(ctk.CTk):
                 tc = any(c["porcentaje"]<=self.cfg["umbral_critico"] for c in (cons or []))
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
-                if cons: guardar_historial(ip, cons)
+                if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
             self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:
@@ -2393,7 +2396,7 @@ class App(ctk.CTk):
                 tc = any(c["porcentaje"]<=self.cfg["umbral_critico"] for c in (cons or []))
                 ta = any(c["porcentaje"]<=self.cfg["umbral_alerta"]  for c in (cons or []))
                 est = "critico" if tc else "alerta" if ta else "ok"
-                if cons: guardar_historial(ip, cons)
+                if cons: guardar_historial(ip, cons, nombre=info.get("sys_nombre") or imp.get("nombre"))
             self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
             self.after(0, self._poblar_tabla)
             if self.sel_ip == ip:

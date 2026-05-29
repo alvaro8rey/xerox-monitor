@@ -59,8 +59,10 @@ def api_impresoras():
                 })
             cons_list.sort(key=lambda x: x["pct"])
 
+        # Usar el nombre guardado en el último registro del historial (puede venir de SNMP)
+        nombre = (ultimo.get("nombre") if ultimo else None) or imp.get("nombre", ip)
         out.append({
-            "nombre":    imp.get("nombre", ip),
+            "nombre":    nombre,
             "ip":        ip,
             "ubicacion": imp.get("ubicacion", ""),
             "estado":    estado,
@@ -73,7 +75,9 @@ def api_impresoras():
         1 if x["estado"] == "alerta"  else
         2 if x["estado"] == "ok"      else 3
     ))
-    return jsonify(out)
+    resp = jsonify(out)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/api/contabilidad")
@@ -108,7 +112,9 @@ def api_contabilidad():
             "departamentos": list(DEPARTAMENTOS),
             "excluir":       list(EXCLUIR),
         })
-    return jsonify(result)
+    resp = jsonify(result)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
@@ -482,9 +488,21 @@ function renderContabilidad() {
     </tr>`;
   }
 
-  function secHeader(titulo) {
+  // Estado de colapso persistente entre renders
+  if (!renderContabilidad._collapsed) renderContabilidad._collapsed = {};
+  const _col = renderContabilidad._collapsed;
+
+  function secHeader(key, titulo) {
+    const collapsed = !!_col[key];
     const cols = 4 + (hasColor?2:0);
-    return `<tr class="sec-header"><td colspan="${cols}">▼  ${titulo}</td></tr>`;
+    const icono = collapsed ? '▶' : '▼';
+    return `<tr class="sec-header" style="cursor:pointer" onclick="toggleSection('${key}')">
+      <td colspan="${cols}">${icono}&nbsp;&nbsp;${titulo}</td></tr>`;
+  }
+
+  function secRows(key, filas) {
+    if (_col[key]) return '';
+    return filas.map(r => fRow(r)).join('');
   }
 
   const all = [...deptos,...users];
@@ -509,11 +527,17 @@ function renderContabilidad() {
         <th>Usuario</th><th>Imp. B/N</th>${colColor}<th>Cop. B/N</th><th>Total</th>
       </tr></thead>
       <tbody>
-        ${deptos.length ? secHeader('DEPARTAMENTOS ('+deptos.length+')') + deptos.map(r=>fRow(r)).join('') : ''}
-        ${users.length  ? secHeader('USUARIOS ('      +users.length +')')  + users.map(r=>fRow(r)).join('') : ''}
+        ${deptos.length ? secHeader('deptos','DEPARTAMENTOS ('+deptos.length+')') + secRows('deptos',deptos) : ''}
+        ${users.length  ? secHeader('users', 'USUARIOS ('     +users.length +')')  + secRows('users', users)  : ''}
         ${totalRow}
       </tbody>
     </table>`;
+}
+
+function toggleSection(key) {
+  if (!renderContabilidad._collapsed) renderContabilidad._collapsed = {};
+  renderContabilidad._collapsed[key] = !renderContabilidad._collapsed[key];
+  renderContabilidad();
 }
 
 function esc(s) {
