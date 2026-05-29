@@ -90,6 +90,10 @@ DEFAULT_CONFIG = {
     "comunidad_snmp": "public",
     "timeout_snmp":   2.0,
     "autorefresh_seg": 0,
+    "xsa_usuario":    "admin",
+    "xsa_password":   "",
+    "xsa_autodownload": True,
+    "xsa_ultimo_mes": "",   # "YYYY-MM" del último autodownload
 }
 
 # ── PALETA ────────────────────────────────────────────────────────────────────
@@ -744,15 +748,38 @@ class DialogConfig(ctk.CTkToplevel):
         self.autoref.set(mapa.get(cfg["autorefresh_seg"], "Desactivado"))
         self.autoref.pack(**pad)
 
+        ctk.CTkFrame(scroll, fg_color=BORDER, height=1).pack(fill="x", padx=20, pady=(14,4))
+        ctk.CTkLabel(scroll, text="Descarga automática XSA (día 1 de cada mes)",
+                     text_color=TEXT2, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20, pady=(4,0))
+
+        lbl("Usuario web impresora")
+        self.xsa_user = ctk.CTkEntry(scroll, width=340, fg_color=BG3, border_color=BORDER, text_color=TEXT)
+        self.xsa_user.insert(0, cfg.get("xsa_usuario", "admin"))
+        self.xsa_user.pack(**pad)
+
+        lbl("Contraseña web impresora")
+        self.xsa_pass = ctk.CTkEntry(scroll, width=340, fg_color=BG3, border_color=BORDER,
+                                      text_color=TEXT, show="•")
+        self.xsa_pass.insert(0, cfg.get("xsa_password", ""))
+        self.xsa_pass.pack(**pad)
+
+        self.xsa_auto_var = tk.BooleanVar(value=cfg.get("xsa_autodownload", True))
+        ctk.CTkCheckBox(scroll, text="Activar descarga automática el día 1",
+                        variable=self.xsa_auto_var, text_color=TEXT,
+                        font=("Segoe UI", 11), fg_color=ACCENT).pack(anchor="w", padx=24, pady=6)
+
     def _guardar(self):
         try:
             mapa_inv = {"Desactivado":0,"30s":30,"60s":60,"2 min":120,"5 min":300}
             self.cfg.update({
-                "umbral_critico":  int(self.crit_var.get()),
-                "umbral_alerta":   int(self.alert_var.get()),
-                "comunidad_snmp":  self.com.get().strip() or "public",
-                "timeout_snmp":    float(self.timeout.get()),
-                "autorefresh_seg": mapa_inv.get(self.autoref.get(), 0),
+                "umbral_critico":    int(self.crit_var.get()),
+                "umbral_alerta":     int(self.alert_var.get()),
+                "comunidad_snmp":    self.com.get().strip() or "public",
+                "timeout_snmp":      float(self.timeout.get()),
+                "autorefresh_seg":   mapa_inv.get(self.autoref.get(), 0),
+                "xsa_usuario":       self.xsa_user.get().strip() or "admin",
+                "xsa_password":      self.xsa_pass.get(),
+                "xsa_autodownload":  self.xsa_auto_var.get(),
             })
             guardar_json(CONFIG_FILE, self.cfg)
             self.on_save()
@@ -1819,9 +1846,15 @@ class App(ctk.CTk):
         self._autoref_job = None
         self._reminder_shown = False
 
+        # Precargar contraseña por defecto si no está guardada
+        if not self.cfg.get("xsa_password"):
+            self.cfg["xsa_password"] = "1111"
+            guardar_json(CONFIG_FILE, self.cfg)
+
         self._build_ui()
         self._poblar_tabla()
         self._schedule_autoref()
+        self._schedule_xsa_autodownload()
         self._check_monthly_reminder()
 
         if not SNMP_OK:
@@ -2384,6 +2417,82 @@ class App(ctk.CTk):
         self._scan_thread = threading.Thread(target=self._scan_worker, daemon=True)
         self._scan_thread.start()
         self._schedule_autoref()
+
+    # ── XSA AUTO DOWNLOAD ─────────────────────────────────────────────────────
+    def _schedule_xsa_autodownload(self):
+        """Programa el próximo tick para cuando sea el día 1 a las 00:00."""
+        if not self.cfg.get("xsa_autodownload") or not self.cfg.get("xsa_password"):
+            return
+        now = datetime.now()
+        # Próximo día 1 a las 00:00
+        if now.month == 12:
+            prox = datetime(now.year + 1, 1, 1)
+        else:
+            prox = datetime(now.year, now.month + 1, 1)
+        ms = int((prox - now).total_seconds() * 1000)
+        self.after(ms, self._tick_xsa_autodownload)
+
+    def _tick_xsa_autodownload(self):
+        mes_actual = datetime.now().strftime("%Y-%m")
+        if self.cfg.get("xsa_ultimo_mes") == mes_actual:
+            self._schedule_xsa_autodownload()
+            return
+        if not REQUESTS_OK:
+            self._schedule_xsa_autodownload()
+            return
+
+        usr = self.cfg.get("xsa_usuario", "admin")
+        pwd = self.cfg.get("xsa_password", "")
+
+        def worker():
+            errores = []
+            ok = 0
+            datos = cargar_json(CONTABILIDAD_FILE, {})
+            for imp in self.impresoras:
+                ip = imp["ip"]
+                csv_txt, err = _xsa_descargar_csv(ip, pwd, usr)
+                if err:
+                    errores.append(f"{imp['nombre']}: {err}")
+                    continue
+                try:
+                    import io as _io
+                    filas = []
+                    for sep in (";", ",", "\t"):
+                        import csv as _csv
+                        reader = _csv.DictReader(_io.StringIO(csv_txt), delimiter=sep)
+                        raw = list(reader)
+                        if raw and len(raw[0]) > 2:
+                            filas = self._dlg_contabilidad._procesar_filas(raw)
+                            break
+                    if filas:
+                        if ip not in datos:
+                            datos[ip] = {"nombre_impresora": f"{imp['nombre']} ({ip})", "snapshots": {}}
+                        datos[ip]["snapshots"][mes_actual] = {
+                            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "usuarios": filas,
+                        }
+                        ok += 1
+                    else:
+                        errores.append(f"{imp['nombre']}: CSV sin datos de usuario")
+                except Exception as e:
+                    errores.append(f"{imp['nombre']}: {e}")
+
+            guardar_json(CONTABILIDAD_FILE, datos)
+            self.cfg["xsa_ultimo_mes"] = mes_actual
+            guardar_json(CONFIG_FILE, self.cfg)
+
+            def done():
+                self._dlg_contabilidad._datos = datos
+                self._dlg_contabilidad._refresh_controls()
+                self._dlg_contabilidad._poblar()
+                msg = f"✔ Descarga automática XSA completada: {ok} impresora(s)."
+                if errores:
+                    msg += "\nErrores:\n" + "\n".join(errores)
+                self.lbl_scan.configure(text=msg)
+            self.after(0, done)
+            self._schedule_xsa_autodownload()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
     def _añadir(self):
