@@ -281,22 +281,54 @@ def _parsear_rango(texto):
         pass
     return ips
 
-def _snmp_ping(ip, comunidad, timeout):
-    """Intenta obtener sysDescr. Devuelve dict con info o None si no responde."""
+async def _snmp_ping_async(ip, comunidad, timeout):
+    """Comprueba SNMP e impresora MIB. Solo devuelve resultado si es impresora."""
+    dispatcher = SnmpDispatcher()
     try:
-        resultado = asyncio.run(_snmp_info_extra(ip, comunidad, min(timeout, 1.5)))
-        if not resultado:
+        transport = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=0)
+    except Exception:
+        return None
+
+    async def get(oid):
+        try:
+            errI, errS, _, vb = await get_cmd(
+                dispatcher, CommunityData(comunidad), transport,
+                ObjectType(ObjectIdentity(oid))
+            )
+            if errI or errS:
+                return None
+            for _, val in vb:
+                v = str(val).strip()
+                if "No Such" in v or "End of" in v or not v:
+                    return None
+                return v
+        except Exception:
             return None
-        desc = resultado.get("sys_desc", "")
-        # Filtrar dispositivos que probablemente no son impresoras si no hay datos relevantes
-        nombre = resultado.get("sys_nombre") or resultado.get("modelo") or ""
-        modelo = resultado.get("modelo", "")
-        return {
-            "ip": ip,
-            "sys_desc": desc[:60],
-            "nombre": nombre[:50] or ip,
-            "modelo": modelo[:40],
-        }
+
+    # Verificar Printer MIB: prtMarkerSuppliesDescription (1.3.6.1.2.1.43.11.1.1.6.1.1)
+    # Es el OID más fiable para confirmar que es una impresora
+    es_impresora = await get("1.3.6.1.2.1.43.11.1.1.6.1.1")
+    if not es_impresora:
+        # Segunda oportunidad: prtGeneralSerialNumber
+        es_impresora = await get("1.3.6.1.2.1.43.5.1.1.17.1")
+    if not es_impresora:
+        return None
+
+    nombre   = await get("1.3.6.1.2.1.1.5.0") or ""   # sysName
+    modelo   = await get("1.3.6.1.2.1.25.3.2.1.3.1") or ""  # hrDeviceDescr
+    sys_desc = await get("1.3.6.1.2.1.1.1.0") or ""
+
+    nombre = (nombre or modelo or sys_desc or ip)[:50]
+    return {
+        "ip": ip,
+        "sys_desc": sys_desc[:60],
+        "nombre": nombre,
+        "modelo": modelo[:40],
+    }
+
+def _snmp_ping(ip, comunidad, timeout):
+    try:
+        return asyncio.run(_snmp_ping_async(ip, comunidad, min(timeout, 1.5)))
     except Exception:
         return None
 
