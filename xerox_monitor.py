@@ -1359,25 +1359,31 @@ class DialogContabilidadEmbebida(ctk.CTkFrame):
                         imp_color = max(0, u["imp_color"] - pu["imp_color"])
                         cop_bw    = max(0, u["cop_bw"]    - pu["cop_bw"])
                         cop_color = max(0, u["cop_color"] - pu["cop_color"])
-                        scan      = max(0, u["scan"]      - pu["scan"])
                     else:
                         imp_bw    = u["imp_bw"]
                         imp_color = u["imp_color"]
                         cop_bw    = u["cop_bw"]
                         cop_color = u["cop_color"]
-                        scan      = u["scan"]
                     total = imp_bw + imp_color + cop_bw + cop_color
                     nota = "" if prev_key else " (sin mes anterior)"
-                    all_rows.append((nombre_imp, uname + nota, imp_bw, imp_color,
+                    uid = u.get("id", "")
+                    label = f"{uname} ({uid}){nota}" if uid else uname + nota
+                    all_rows.append((nombre_imp, label, imp_bw, imp_color,
                                      cop_bw, cop_color, total))
             else:
                 for u in cur_snap.get("usuarios", []):
-                    all_rows.append((nombre_imp, u["usuario"], u["imp_bw"], u["imp_color"],
+                    uid = u.get("id", "")
+                    label = f"{u['usuario']} ({uid})" if uid else u["usuario"]
+                    all_rows.append((nombre_imp, label, u["imp_bw"], u["imp_color"],
                                      u["cop_bw"], u["cop_color"], u["total"]))
 
         # Separar en departamentos y usuarios
-        deptos = [r for r in all_rows if r[1].lower().rstrip() in self._DEPARTAMENTOS]
-        users  = [r for r in all_rows if r[1].lower().rstrip() not in self._DEPARTAMENTOS]
+        def _nombre_base(label):
+            # Quitar "(id)" y notas para comparar contra listas
+            return label.split(" (")[0].lower().rstrip()
+
+        deptos = [r for r in all_rows if _nombre_base(r[1]) in self._DEPARTAMENTOS]
+        users  = [r for r in all_rows if _nombre_base(r[1]) not in self._DEPARTAMENTOS]
 
         _COL_IDX = {"impresora":0,"usuario":1,"imp_bw":2,"imp_color":3,
                     "cop_bw":4,"cop_color":5,"total":6}
