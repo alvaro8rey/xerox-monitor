@@ -861,6 +861,7 @@ def _mes_label(mes_key):
 
 
 class DialogContabilidad(ctk.CTkToplevel):
+    """Versión ventana flotante (mantenida por compatibilidad)."""
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Contabilidad por usuario")
@@ -870,6 +871,23 @@ class DialogContabilidad(ctk.CTkToplevel):
         self.grab_set()
         self.lift()
         self.focus_force()
+
+        self._datos = cargar_json(CONTABILIDAD_FILE, {})
+        self._migrar_formato_antiguo()
+        self._sel_impresora = "Todas"
+        self._sel_mes = "Acumulado"
+        self._sel_vista = "Acumulado"
+        self._sort_col = None
+        self._sort_rev = False
+        self._collapsed = {"DEPARTAMENTOS": False, "USUARIOS": False}
+        self._build()
+
+
+class DialogContabilidadEmbebida(ctk.CTkFrame):
+    """Versión embebida en el panel principal (sin ventana flotante)."""
+    def __init__(self, parent, app):
+        super().__init__(parent, fg_color=BG2, corner_radius=0)
+        self._app = app
 
         self._datos = cargar_json(CONTABILIDAD_FILE, {})
         self._migrar_formato_antiguo()
@@ -965,18 +983,17 @@ class DialogContabilidad(ctk.CTkToplevel):
         tbl_frame.pack(fill="both", expand=True, padx=8, pady=(4, 0))
 
         cols = ("impresora", "usuario", "imp_bw", "imp_color",
-                "cop_bw", "cop_color", "scan", "total")
+                "cop_bw", "cop_color", "total")
         self.tree = ttk.Treeview(tbl_frame, columns=cols,
                                   show="headings", style="F.Treeview", selectmode="browse")
         for col, hdr, w, stretch in [
             ("impresora", "Impresora",      160, True),
             ("usuario",   "Usuario",        150, True),
-            ("imp_bw",    "Imp. B/N",        80, False),
-            ("imp_color", "Imp. Color",      80, False),
-            ("cop_bw",    "Cop. B/N",        80, False),
-            ("cop_color", "Cop. Color",      80, False),
-            ("scan",      "Escaneos",        80, False),
-            ("total",     "Total páginas",  100, False),
+            ("imp_bw",    "Imp. B/N",        90, False),
+            ("imp_color", "Imp. Color",      90, False),
+            ("cop_bw",    "Cop. B/N",        90, False),
+            ("cop_color", "Cop. Color",      90, False),
+            ("total",     "Total páginas",  110, False),
         ]:
             self.tree.heading(col, text=hdr, command=lambda c=col: self._sort(c))
             self.tree.column(col, width=w,
@@ -1070,7 +1087,7 @@ class DialogContabilidad(ctk.CTkToplevel):
             return
 
         try:
-            impresoras = self.master.impresoras
+            impresoras = getattr(self, '_app', self.master).impresoras
         except Exception:
             impresoras = []
 
@@ -1165,7 +1182,7 @@ class DialogContabilidad(ctk.CTkToplevel):
 
         ips = []
         try:
-            parent_app = self.master
+            parent_app = getattr(self, '_app', self.master)
             ips = [f"{i['nombre']} ({i['ip']})" for i in parent_app.impresoras]
         except Exception:
             pass
@@ -1352,20 +1369,19 @@ class DialogContabilidad(ctk.CTkToplevel):
                     total = imp_bw + imp_color + cop_bw + cop_color
                     nota = "" if prev_key else " (sin mes anterior)"
                     all_rows.append((nombre_imp, uname + nota, imp_bw, imp_color,
-                                     cop_bw, cop_color, scan, total))
+                                     cop_bw, cop_color, total))
             else:
-                # Acumulado or Mensual without previous: show latest values
                 for u in cur_snap.get("usuarios", []):
                     all_rows.append((nombre_imp, u["usuario"], u["imp_bw"], u["imp_color"],
-                                     u["cop_bw"], u["cop_color"], u["scan"], u["total"]))
+                                     u["cop_bw"], u["cop_color"], u["total"]))
 
         # Separar en departamentos y usuarios
         deptos = [r for r in all_rows if r[1].lower().rstrip() in self._DEPARTAMENTOS]
         users  = [r for r in all_rows if r[1].lower().rstrip() not in self._DEPARTAMENTOS]
 
         _COL_IDX = {"impresora":0,"usuario":1,"imp_bw":2,"imp_color":3,
-                    "cop_bw":4,"cop_color":5,"scan":6,"total":7}
-        sort_idx = _COL_IDX.get(self._sort_col, 7)
+                    "cop_bw":4,"cop_color":5,"total":6}
+        sort_idx = _COL_IDX.get(self._sort_col, 6)
         rev = self._sort_rev if self._sort_col else True
 
         def _sort_key(r):
@@ -1382,8 +1398,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         tot_imp_color = sum(r[3] for r in all_rows)
         tot_cop_bw    = sum(r[4] for r in all_rows)
         tot_cop_color = sum(r[5] for r in all_rows)
-        tot_scan      = sum(r[6] for r in all_rows)
-        tot_total     = sum(r[7] for r in all_rows)
+        tot_total     = sum(r[6] for r in all_rows)
 
         show_imp_col = (ip_filter == "Todas")
         self._update_imp_col_visibility()
@@ -1394,12 +1409,11 @@ class DialogContabilidad(ctk.CTkToplevel):
             collapsed = self._collapsed.get(titulo, False)
             icono = "▶" if collapsed else "▼"
             iid_sec = f"sec_{titulo}"
-            # Eliminar si ya existe (repoblado)
             if self.tree.exists(iid_sec):
                 self.tree.delete(iid_sec)
             self.tree.insert("", "end", iid=iid_sec, values=(
                 "", f"{icono}  {titulo}  ({len(filas)})",
-                "", "", "", "", "", "",
+                "", "", "", "", "",
             ), tags=("seccion",))
             if collapsed:
                 return
@@ -1415,7 +1429,6 @@ class DialogContabilidad(ctk.CTkToplevel):
                     r[4] if r[4] else "—",
                     r[5] if r[5] else "—",
                     r[6] if r[6] else "—",
-                    r[7] if r[7] else "—",
                 ), tags=(tag,))
 
         _insertar_seccion("DEPARTAMENTOS", deptos)
@@ -1428,7 +1441,7 @@ class DialogContabilidad(ctk.CTkToplevel):
                 "TOTAL" if not show_imp_col else "",
                 tot_imp_bw or "—", tot_imp_color or "—",
                 tot_cop_bw or "—", tot_cop_color or "—",
-                tot_scan or "—", tot_total or "—",
+                tot_total or "—",
             ), tags=("totales",))
 
         ts_str = "  |  ".join(ts_mostrar) if ts_mostrar else "Sin snapshots"
@@ -1565,6 +1578,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Fleet Monitor Pro")
         self.geometry("1280x720")
+        self.after(0, lambda: self.state("zoomed"))
         self.minsize(960, 560)
         self.configure(fg_color=BG)
         ctk.set_appearance_mode("dark")
@@ -1622,24 +1636,64 @@ class App(ctk.CTk):
         tb.pack(fill="x")
         tb.pack_propagate(False)
 
+        self.btn_volver = ctk.CTkButton(tb, text="←  Volver", width=100, height=32,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 11),
+                      command=self._volver_inicio)
+        # se muestra solo en vistas secundarias
+
         ctk.CTkLabel(tb, text="🖨 Fleet Monitor Pro",
                      font=("Segoe UI", 14, "bold"), text_color=TEXT).pack(side="left", padx=16)
         self.lbl_ts = ctk.CTkLabel(tb, text="", font=("Segoe UI", 10), text_color=TEXT2)
         self.lbl_ts.pack(side="left", padx=6)
 
-        ctk.CTkButton(tb, text="↺  Refrescar", width=110, height=32,
+        self.btn_refrescar = ctk.CTkButton(tb, text="↺  Refrescar", width=110, height=32,
                       fg_color=ACCENT, hover_color="#3a7de8",
                       text_color=TEXT, font=("Segoe UI", 11, "bold"),
-                      command=self._refrescar_todo).pack(side="right", padx=12, pady=8)
+                      command=self._refrescar_todo)
+        self.btn_refrescar.pack(side="right", padx=12, pady=8)
+
+        # Contenedor de vistas (inicio / contabilidad / ...)
+        self._views = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        self._views.pack(fill="both", expand=True)
+
+        self._view_inicio = ctk.CTkFrame(self._views, fg_color=BG, corner_radius=0)
+        self._view_contabilidad = ctk.CTkFrame(self._views, fg_color=BG, corner_radius=0)
 
         self._build_ui_rest()
+        self._build_contabilidad_embebida()
+        self._mostrar_vista(self._view_inicio)
+
+    def _mostrar_vista(self, vista):
+        for v in (self._view_inicio, self._view_contabilidad):
+            v.pack_forget()
+        vista.pack(fill="both", expand=True)
+        es_inicio = (vista is self._view_inicio)
+        if es_inicio:
+            self.btn_volver.pack_forget()
+            self.btn_refrescar.pack(side="right", padx=12, pady=8)
+        else:
+            self.btn_refrescar.pack_forget()
+            self.btn_volver.pack(side="left", padx=6, pady=8)
+
+    def _volver_inicio(self):
+        self._mostrar_vista(self._view_inicio)
+
+    def _build_contabilidad_embebida(self):
+        self._dlg_contabilidad = DialogContabilidadEmbebida(self._view_contabilidad, self)
+        self._dlg_contabilidad.pack(fill="both", expand=True)
+
+    def _abrir_contabilidad(self):
+        # Refrescar datos por si han cambiado
+        self._dlg_contabilidad._datos = cargar_json(CONTABILIDAD_FILE, {})
+        self._dlg_contabilidad._migrar_formato_antiguo()
+        self._dlg_contabilidad._refresh_controls()
+        self._dlg_contabilidad._poblar()
+        self._mostrar_vista(self._view_contabilidad)
 
     def _acerca_de(self):
         messagebox.showinfo("Acerca de Fleet Monitor Pro",
                             "Fleet Monitor Pro\nVersión 1.0\n\nMonitorización de consumibles de impresoras vía SNMP.")
-
-    def _abrir_contabilidad(self):
-        DialogContabilidad(self)
 
     def _check_monthly_reminder(self):
         if self._reminder_shown:
@@ -1662,11 +1716,12 @@ class App(ctk.CTk):
                 return
 
     def _build_ui_rest(self):
+        vi = self._view_inicio
         # ── KPI bar ──
-        kpi_bar = ctk.CTkFrame(self, fg_color=BG2, height=56, corner_radius=0)
+        kpi_bar = ctk.CTkFrame(vi, fg_color=BG2, height=56, corner_radius=0)
         kpi_bar.pack(fill="x")
         kpi_bar.pack_propagate(False)
-        sep = ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0)
+        sep = ctk.CTkFrame(vi, fg_color=BORDER, height=1, corner_radius=0)
         sep.pack(fill="x")
 
         self.kpi_vars = {}
@@ -1684,7 +1739,7 @@ class App(ctk.CTk):
             ctk.CTkLabel(f, text=lbl, font=("Segoe UI", 9), text_color=TEXT2).pack()
 
         # ── Search bar ──
-        sb = ctk.CTkFrame(self, fg_color=BG, height=38, corner_radius=0)
+        sb = ctk.CTkFrame(vi, fg_color=BG, height=38, corner_radius=0)
         sb.pack(fill="x", padx=8, pady=(6,2))
         sb.pack_propagate(False)
 
@@ -1704,7 +1759,7 @@ class App(ctk.CTk):
         self.lbl_scan.pack(side="left", padx=10)
 
         # ── Cuerpo: tabla + panel ──
-        body = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
+        body = ctk.CTkFrame(vi, fg_color=BG, corner_radius=0)
         body.pack(fill="both", expand=True, padx=8, pady=(0,8))
 
         # Tabla
