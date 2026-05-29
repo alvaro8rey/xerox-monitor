@@ -1,8 +1,9 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
-import json, os, asyncio, socket, threading, csv
+import json, os, asyncio, socket, threading, csv, ipaddress
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── SNMP ──────────────────────────────────────────────────────────────────────
 SNMP_OK = False
@@ -257,6 +258,257 @@ def obtener_info_extra(ip, comunidad="public", timeout=2.0):
     try:    return asyncio.run(_snmp_info_extra(ip, comunidad, timeout))
     except: return {}
 
+# ── ESCANEO DE RED ────────────────────────────────────────────────────────────
+def _parsear_rango(texto):
+    """Devuelve lista de IPs a escanear desde CIDR, rango A-B o IP única."""
+    texto = texto.strip()
+    ips = []
+    try:
+        if "/" in texto:
+            red = ipaddress.IPv4Network(texto, strict=False)
+            ips = [str(h) for h in red.hosts()]
+        elif "-" in texto:
+            partes = texto.rsplit("-", 1)
+            base = partes[0].rsplit(".", 1)
+            prefijo = base[0]
+            ini = int(base[1])
+            fin = int(partes[1])
+            ips = [f"{prefijo}.{i}" for i in range(ini, fin + 1)]
+        else:
+            ipaddress.IPv4Address(texto)
+            ips = [texto]
+    except Exception:
+        pass
+    return ips
+
+def _snmp_ping(ip, comunidad, timeout):
+    """Intenta obtener sysDescr. Devuelve dict con info o None si no responde."""
+    try:
+        resultado = asyncio.run(_snmp_info_extra(ip, comunidad, min(timeout, 1.5)))
+        if not resultado:
+            return None
+        desc = resultado.get("sys_desc", "")
+        # Filtrar dispositivos que probablemente no son impresoras si no hay datos relevantes
+        nombre = resultado.get("sys_nombre") or resultado.get("modelo") or ""
+        modelo = resultado.get("modelo", "")
+        return {
+            "ip": ip,
+            "sys_desc": desc[:60],
+            "nombre": nombre[:50] or ip,
+            "modelo": modelo[:40],
+        }
+    except Exception:
+        return None
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DIALOGO ESCANEO DE RED
+# ══════════════════════════════════════════════════════════════════════════════
+class DialogEscaneoRed(ctk.CTkToplevel):
+    def __init__(self, parent, cfg, ips_existentes):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.ips_existentes = set(ips_existentes)
+        self.resultado = []          # lista de dicts a añadir
+        self._cancelar = False
+        self._checks = {}            # ip → BooleanVar
+
+        self.title("Escaneo de red")
+        self.geometry("620x580")
+        self.minsize(540, 480)
+        self.configure(fg_color=BG2)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+        # ── Barra inferior fija ──
+        btns = ctk.CTkFrame(self, fg_color=BG2, height=56)
+        btns.pack(side="bottom", fill="x", padx=20, pady=12)
+        btns.pack_propagate(False)
+        self.btn_cancel = ctk.CTkButton(
+            btns, text="Cancelar", width=130, height=36,
+            fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+            font=("Segoe UI", 12), command=self._on_cancel)
+        self.btn_cancel.pack(side="left", padx=4)
+        self.btn_add = ctk.CTkButton(
+            btns, text="＋  Añadir seleccionados", width=190, height=36,
+            fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+            font=("Segoe UI", 12, "bold"), command=self._añadir_sel,
+            state="disabled")
+        self.btn_add.pack(side="right", padx=4)
+
+        sep = ctk.CTkFrame(self, fg_color=BORDER, height=1)
+        sep.pack(side="bottom", fill="x")
+
+        # ── Cuerpo ──
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+
+        # Fila de entrada
+        row1 = ctk.CTkFrame(body, fg_color="transparent")
+        row1.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(row1, text="Rango de red:", text_color=TEXT2,
+                     font=("Segoe UI", 11)).pack(side="left")
+        self.entry_rango = ctk.CTkEntry(
+            row1, placeholder_text="192.168.1.0/24  ó  192.168.1.1-254",
+            width=300, height=32, fg_color=BG3, border_color=BORDER, text_color=TEXT,
+            font=("Segoe UI", 11))
+        self.entry_rango.pack(side="left", padx=8)
+        self.btn_scan = ctk.CTkButton(
+            row1, text="▶  Escanear", width=110, height=32,
+            fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+            font=("Segoe UI", 11, "bold"), command=self._iniciar_scan)
+        self.btn_scan.pack(side="left", padx=4)
+
+        # Progreso
+        self.lbl_prog = ctk.CTkLabel(body, text="", text_color=TEXT2,
+                                      font=("Segoe UI", 10))
+        self.lbl_prog.pack(anchor="w")
+        self.progress = ctk.CTkProgressBar(body, width=580, height=8,
+                                            fg_color=BG3, progress_color=ACCENT)
+        self.progress.set(0)
+        self.progress.pack(fill="x", pady=(2, 8))
+
+        # Cabecera de resultados
+        hdr = ctk.CTkFrame(body, fg_color=BG3, corner_radius=4, height=28)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(hdr, text="✔", width=30, font=("Segoe UI", 10, "bold"),
+                     text_color=TEXT2).pack(side="left", padx=4)
+        for txt, w in [("IP", 130), ("Nombre / Hostname", 180), ("Modelo", 200)]:
+            ctk.CTkLabel(hdr, text=txt, width=w, font=("Segoe UI", 9, "bold"),
+                         text_color=TEXT2, anchor="w").pack(side="left", padx=4)
+
+        # Lista de resultados (scroll)
+        self.scroll = ctk.CTkScrollableFrame(body, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True, pady=(2, 0))
+
+        self.lbl_vacio = ctk.CTkLabel(
+            self.scroll, text="Introduce un rango y pulsa Escanear",
+            text_color=TEXT2, font=("Segoe UI", 11))
+        self.lbl_vacio.pack(pady=40)
+
+    def _iniciar_scan(self):
+        rango = self.entry_rango.get().strip()
+        ips = _parsear_rango(rango)
+        if not ips:
+            self.lbl_prog.configure(text="⚠  Rango no válido. Ej: 192.168.1.0/24", text_color=CRIT)
+            return
+        if len(ips) > 1024:
+            self.lbl_prog.configure(text="⚠  Rango demasiado grande (máx 1024 IPs)", text_color=CRIT)
+            return
+
+        # Limpiar resultados anteriores
+        for w in self.scroll.winfo_children():
+            w.destroy()
+        self._checks.clear()
+        self.btn_add.configure(state="disabled")
+        self.btn_scan.configure(state="disabled")
+        self._cancelar = False
+        self.progress.set(0)
+        self.lbl_prog.configure(text=f"Escaneando {len(ips)} IPs...", text_color=TEXT2)
+
+        threading.Thread(target=self._scan_worker, args=(ips,), daemon=True).start()
+
+    def _scan_worker(self, ips):
+        total = len(ips)
+        encontrados = 0
+        com = self.cfg["comunidad_snmp"]
+        timeout = min(self.cfg["timeout_snmp"], 1.5)
+
+        # Usamos hasta 80 hilos en paralelo — el timeout corto evita bloqueos
+        with ThreadPoolExecutor(max_workers=min(80, total)) as ex:
+            futures = {ex.submit(_snmp_ping, ip, com, timeout): ip for ip in ips}
+            done = 0
+            for fut in as_completed(futures):
+                if self._cancelar:
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    break
+                done += 1
+                resultado = fut.result()
+                progreso = done / total
+                self.after(0, lambda p=progreso, d=done, t=total:
+                           self._actualizar_prog(p, d, t))
+                if resultado:
+                    encontrados += 1
+                    self.after(0, lambda r=resultado: self._agregar_fila(r))
+
+        if not self._cancelar:
+            self.after(0, lambda e=encontrados: self._scan_done(e))
+
+    def _actualizar_prog(self, p, done, total):
+        self.progress.set(p)
+        self.lbl_prog.configure(
+            text=f"Escaneando... {done}/{total} IPs  ({int(p*100)}%)",
+            text_color=TEXT2)
+
+    def _scan_done(self, encontrados):
+        self.btn_scan.configure(state="normal")
+        self.progress.set(1)
+        if encontrados == 0:
+            self.lbl_prog.configure(
+                text="Sin dispositivos SNMP encontrados en ese rango.", text_color=WARN)
+            self.lbl_vacio = ctk.CTkLabel(
+                self.scroll, text="Sin resultados", text_color=TEXT2,
+                font=("Segoe UI", 11))
+            self.lbl_vacio.pack(pady=40)
+        else:
+            ya = sum(1 for ip in self._checks if ip in self.ips_existentes)
+            nuevos = encontrados - ya
+            self.lbl_prog.configure(
+                text=f"✔  {encontrados} dispositivos encontrados  ({nuevos} nuevos)",
+                text_color=OK)
+            if nuevos > 0:
+                self.btn_add.configure(state="normal")
+
+    def _agregar_fila(self, r):
+        ip = r["ip"]
+        ya_existe = ip in self.ips_existentes
+        var = tk.BooleanVar(value=not ya_existe)
+        self._checks[ip] = (var, r)
+
+        fila = ctk.CTkFrame(self.scroll, fg_color=BG3 if ya_existe else BG2,
+                             corner_radius=3, height=30)
+        fila.pack(fill="x", pady=1)
+        fila.pack_propagate(False)
+
+        cb = ctk.CTkCheckBox(fila, text="", variable=var, width=30,
+                              fg_color=ACCENT, hover_color="#3a7de8",
+                              state="disabled" if ya_existe else "normal",
+                              command=self._check_changed)
+        cb.pack(side="left", padx=4)
+
+        color = TEXT2 if ya_existe else TEXT
+        ctk.CTkLabel(fila, text=ip, width=130, font=("Consolas", 10),
+                     text_color=color, anchor="w").pack(side="left", padx=4)
+        nombre = (r["nombre"] or ip)
+        sufijo = "  (ya añadida)" if ya_existe else ""
+        ctk.CTkLabel(fila, text=nombre + sufijo, width=180,
+                     font=("Segoe UI", 10), text_color=color,
+                     anchor="w").pack(side="left", padx=4)
+        ctk.CTkLabel(fila, text=r.get("modelo","—") or "—", width=200,
+                     font=("Segoe UI", 10), text_color=TEXT2,
+                     anchor="w").pack(side="left", padx=4)
+
+    def _check_changed(self):
+        hay_sel = any(
+            var.get() and ip not in self.ips_existentes
+            for ip, (var, _) in self._checks.items()
+        )
+        self.btn_add.configure(state="normal" if hay_sel else "disabled")
+
+    def _añadir_sel(self):
+        self.resultado = [
+            {"ip": ip, "nombre": r["nombre"] or ip,
+             "ubicacion": "", "comunidad": ""}
+            for ip, (var, r) in self._checks.items()
+            if var.get() and ip not in self.ips_existentes
+        ]
+        self.destroy()
+
+    def _on_cancel(self):
+        self._cancelar = True
+        self.destroy()
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DIALOGO AÑADIR/EDITAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -464,6 +716,7 @@ class App(ctk.CTk):
         btn_defs = [
             ("⚙  Config",    self._abrir_config,   BG3),
             ("＋  Añadir",   self._añadir,          BG3),
+            ("⊕  Escanear red", self._escanear_red, BG3),
             ("✎  Editar",   self._editar,          BG3),
             ("✕  Eliminar", self._eliminar,        BG3),
             ("↓  Exportar", self._exportar_todo,   BG3),
@@ -900,6 +1153,30 @@ class App(ctk.CTk):
             if cons: guardar_historial(ip, cons)
         self.cache[ip] = {"consumibles":cons,"error":err,"ts":datetime.now(),"estado":est,"info":info}
         self.after(0, self._poblar_tabla)
+
+    # ── ESCANEO RED ───────────────────────────────────────────────────────────
+    def _escanear_red(self):
+        ips_existentes = [i["ip"] for i in self.impresoras]
+        d = DialogEscaneoRed(self, self.cfg, ips_existentes)
+        self.wait_window(d)
+        if not d.resultado:
+            return
+        añadidas = 0
+        ips_ya = {i["ip"] for i in self.impresoras}
+        for imp in d.resultado:
+            if imp["ip"] in ips_ya:
+                continue
+            self.impresoras.append(imp)
+            añadidas += 1
+        if añadidas:
+            guardar_json(DB_FILE, self.impresoras)
+            self._poblar_tabla()
+            # Escanear consumibles de las recién añadidas en background
+            for imp in d.resultado:
+                ip = imp["ip"]
+                threading.Thread(target=lambda _ip=ip: self._escanear_one(_ip),
+                                 daemon=True).start()
+            messagebox.showinfo("Añadidas", f"Se añadieron {añadidas} impresoras.")
 
     # ── CONFIG ────────────────────────────────────────────────────────────────
     def _abrir_config(self):
