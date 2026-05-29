@@ -281,7 +281,7 @@ let _impData  = [];
 let _contData = [];
 let _pinUnlocked = false;
 let _pinBuffer   = '';
-const PIN_CORRECT = '2026';
+const VALID_PINS = new Set({{ pins_json }});
 
 // ── PIN ───────────────────────────────────────────────────────────────────────
 function pinKey(k) {
@@ -291,7 +291,7 @@ function pinKey(k) {
   updatePinDots();
   document.getElementById('pin-err').textContent = '';
   if (_pinBuffer.length === 4) {
-    if (_pinBuffer === PIN_CORRECT) {
+    if (VALID_PINS.has(_pinBuffer)) {
       _pinUnlocked = true;
       document.getElementById('pin-overlay').classList.remove('show');
       document.body.classList.remove('locked');
@@ -549,7 +549,12 @@ setInterval(() => { if (_pinUnlocked) loadImpresoras(); }, 30000);
 
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    cfg  = _load(CONFIG_FILE, {})
+    pins = cfg.get("web_pins", ["2026"])
+    # Sanitize: solo strings de dígitos
+    pins = [str(p) for p in pins if str(p).isdigit()] or ["2026"]
+    import json as _json
+    return render_template_string(HTML, pins_json=_json.dumps(pins))
 
 
 if __name__ == "__main__":

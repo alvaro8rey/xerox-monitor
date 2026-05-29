@@ -102,6 +102,7 @@ DEFAULT_CONFIG = {
     "xsa_password":   "",
     "xsa_autodownload": True,
     "xsa_ultimo_mes": "",   # "YYYY-MM" del último autodownload
+    "web_pins": ["2026"],
 }
 
 # ── PALETA ────────────────────────────────────────────────────────────────────
@@ -796,6 +797,90 @@ class DialogImpresora(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 # DIALOGO CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════
+class DialogWebPins(ctk.CTkToplevel):
+    """Gestión de PINs de acceso al servidor web."""
+    def __init__(self, parent, cfg):
+        super().__init__(parent)
+        self.cfg  = cfg
+        self.pins = list(cfg.get("web_pins", ["2026"]))
+        self.title("Acceso web — PINs")
+        self.geometry("340x420")
+        self.resizable(False, False)
+        self.configure(fg_color=BG2)
+        self.grab_set(); self.lift(); self.focus_force()
+
+        ctk.CTkLabel(self, text="PINs de acceso al servidor web",
+                     font=("Segoe UI", 13, "bold"), text_color=TEXT).pack(pady=(20,4))
+        ctk.CTkLabel(self, text="Cualquiera de estos PINs permite el acceso.\nMínimo 4 dígitos, solo números.",
+                     font=("Segoe UI", 11), text_color=TEXT2, justify="center").pack(pady=(0,12))
+
+        # Lista de PINs
+        list_frame = ctk.CTkFrame(self, fg_color=BG3, corner_radius=8)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=0)
+        self._list_frame = list_frame
+        self._render_list()
+
+        # Añadir PIN
+        add_frame = ctk.CTkFrame(self, fg_color="transparent")
+        add_frame.pack(fill="x", padx=20, pady=(10,4))
+        self._new_pin = ctk.CTkEntry(add_frame, width=160, placeholder_text="Nuevo PIN (4+ dígitos)",
+                                      fg_color=BG3, border_color=BORDER, text_color=TEXT, show="•")
+        self._new_pin.pack(side="left", padx=(0,8))
+        ctk.CTkButton(add_frame, text="+ Añadir", width=100, height=32,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 11), command=self._add_pin).pack(side="left")
+        self._err = ctk.CTkLabel(self, text="", text_color=CRIT, font=("Segoe UI", 10))
+        self._err.pack(pady=(2,0))
+
+        ctk.CTkButton(self, text="✔  Guardar y cerrar", width=200, height=36,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 12, "bold"), command=self._guardar).pack(pady=(10,20))
+
+        self._new_pin.bind("<Return>", lambda e: self._add_pin())
+
+    def _render_list(self):
+        for w in self._list_frame.winfo_children():
+            w.destroy()
+        if not self.pins:
+            ctk.CTkLabel(self._list_frame, text="Sin PINs configurados",
+                         text_color=TEXT2, font=("Segoe UI", 11)).pack(pady=20)
+            return
+        for i, pin in enumerate(self.pins):
+            row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
+            row.pack(fill="x", padx=10, pady=3)
+            ctk.CTkLabel(row, text=f"{'•'*len(pin)}  ({len(pin)} dígitos)",
+                         font=("Consolas", 12), text_color=TEXT, anchor="w").pack(side="left", expand=True, anchor="w")
+            ctk.CTkButton(row, text="Eliminar", width=80, height=26,
+                          fg_color="#3d0f0f", hover_color="#5a1515", text_color=CRIT,
+                          font=("Segoe UI", 10),
+                          command=lambda idx=i: self._remove_pin(idx)).pack(side="right")
+
+    def _add_pin(self):
+        val = self._new_pin.get().strip()
+        if not val.isdigit():
+            self._err.configure(text="Solo se permiten dígitos."); return
+        if len(val) < 4:
+            self._err.configure(text="Mínimo 4 dígitos."); return
+        if val in self.pins:
+            self._err.configure(text="Ese PIN ya existe."); return
+        self._err.configure(text="")
+        self.pins.append(val)
+        self._new_pin.delete(0, "end")
+        self._render_list()
+
+    def _remove_pin(self, idx):
+        if len(self.pins) <= 1:
+            self._err.configure(text="Debe quedar al menos un PIN."); return
+        self._err.configure(text="")
+        self.pins.pop(idx)
+        self._render_list()
+
+    def _guardar(self):
+        self.cfg["web_pins"] = self.pins
+        guardar_json(CONFIG_FILE, self.cfg)
+        self.destroy()
+
+
 class DialogConfig(ctk.CTkToplevel):
     def __init__(self, parent, cfg, on_save):
         super().__init__(parent)
@@ -2088,6 +2173,7 @@ class App(ctk.CTk):
         m_tools.add_separator()
         m_tools.add_command(label="Contabilidad por usuario...", command=self._abrir_contabilidad)
         m_tools.add_separator()
+        m_tools.add_command(label="Acceso web (PINs)...", command=self._abrir_web_pins)
         m_tools.add_command(label="Configuración", command=self._abrir_config)
         menubar.add_cascade(label="Herramientas", menu=m_tools)
 
@@ -2787,6 +2873,9 @@ class App(ctk.CTk):
             messagebox.showinfo("Añadidas", f"Se añadieron {añadidas} impresoras.")
 
     # ── CONFIG ────────────────────────────────────────────────────────────────
+    def _abrir_web_pins(self):
+        DialogWebPins(self, self.cfg)
+
     def _abrir_config(self):
         def on_save():
             self._schedule_autoref()
