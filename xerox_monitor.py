@@ -987,10 +987,12 @@ class DialogContabilidad(ctk.CTkToplevel):
         vsb.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True)
 
-        self.tree.tag_configure("par",     background=BG2,      foreground=TEXT)
-        self.tree.tag_configure("impar",   background=ROW_ALT,  foreground=TEXT)
-        self.tree.tag_configure("top",     background="#1a2e1a", foreground=OK)
-        self.tree.tag_configure("totales", background=BG3,      foreground=ACCENT)
+        self.tree.tag_configure("par",       background=BG2,      foreground=TEXT)
+        self.tree.tag_configure("impar",     background=ROW_ALT,  foreground=TEXT)
+        self.tree.tag_configure("top",       background="#1a2e1a", foreground=OK)
+        self.tree.tag_configure("totales",   background=BG3,      foreground=ACCENT)
+        self.tree.tag_configure("seccion",   background="#1c2a3a", foreground="#7ab4f5",
+                                font=("Segoe UI", 10, "bold"))
 
         # ── Status bar ──
         self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
@@ -1235,6 +1237,12 @@ class DialogContabilidad(ctk.CTkToplevel):
         "fax images": "fax",
     }
 
+    _DEPARTAMENTOS = {d.lower() for d in (
+        "ADMINISTRACIÓN", "DIRECCIÓN", "VICEDIRECCIÓN", "SECRETARÍA",
+        "XEFATURA DE ESTUDOS", "RECURSOS", "ALEMÁN", "PORTUGUÉS",
+        "FRANCÉS", "ITALIANO", "GALEGO", "PLAMBE_EDLG", "INGLÉS", "SUSTITUTO",
+    )}
+
     _EXCLUIR_USUARIOS = {u.lower() for u in (
         "System User", "CUENTA GENERAL", "Customer Service Engineer Account",
         "Xerox Administrative Group", "Admin", "Diagnostics", "Local System User",
@@ -1349,10 +1357,25 @@ class DialogContabilidad(ctk.CTkToplevel):
                     all_rows.append((nombre_imp, u["usuario"], u["imp_bw"], u["imp_color"],
                                      u["cop_bw"], u["cop_color"], u["scan"], u["total"]))
 
-        # Sort by total descending
-        all_rows.sort(key=lambda r: r[7], reverse=True)
+        # Separar en departamentos y usuarios
+        deptos = [r for r in all_rows if r[1].lower().rstrip() in self._DEPARTAMENTOS]
+        users  = [r for r in all_rows if r[1].lower().rstrip() not in self._DEPARTAMENTOS]
 
-        # Totals
+        _COL_IDX = {"impresora":0,"usuario":1,"imp_bw":2,"imp_color":3,
+                    "cop_bw":4,"cop_color":5,"scan":6,"total":7}
+        sort_idx = _COL_IDX.get(self._sort_col, 7)
+        rev = self._sort_rev if self._sort_col else True
+
+        def _sort_key(r):
+            v = r[sort_idx]
+            if isinstance(v, int): return v
+            try: return int(v)
+            except: return str(v).lower()
+
+        deptos.sort(key=_sort_key, reverse=rev)
+        users.sort(key=_sort_key, reverse=rev)
+
+        # Totales globales
         tot_imp_bw    = sum(r[2] for r in all_rows)
         tot_imp_color = sum(r[3] for r in all_rows)
         tot_cop_bw    = sum(r[4] for r in all_rows)
@@ -1363,20 +1386,31 @@ class DialogContabilidad(ctk.CTkToplevel):
         show_imp_col = (ip_filter == "Todas")
         self._update_imp_col_visibility()
 
-        alt = False
-        for i, r in enumerate(all_rows):
-            tag = "par" if alt else "impar"
-            alt = not alt
-            imp_col_val = r[0] if show_imp_col else ""
+        def _insertar_seccion(titulo, filas):
+            if not filas:
+                return
+            # Cabecera de sección (ocupa columna usuario, el resto vacío)
             self.tree.insert("", "end", values=(
-                imp_col_val, r[1],
-                r[2] if r[2] else "—",
-                r[3] if r[3] else "—",
-                r[4] if r[4] else "—",
-                r[5] if r[5] else "—",
-                r[6] if r[6] else "—",
-                r[7] if r[7] else "—",
-            ), tags=(tag,))
+                "", f"▸  {titulo}  ({len(filas)})",
+                "", "", "", "", "", "",
+            ), tags=("seccion",))
+            alt = False
+            for r in filas:
+                tag = "par" if alt else "impar"
+                alt = not alt
+                self.tree.insert("", "end", values=(
+                    r[0] if show_imp_col else "",
+                    r[1],
+                    r[2] if r[2] else "—",
+                    r[3] if r[3] else "—",
+                    r[4] if r[4] else "—",
+                    r[5] if r[5] else "—",
+                    r[6] if r[6] else "—",
+                    r[7] if r[7] else "—",
+                ), tags=(tag,))
+
+        _insertar_seccion("DEPARTAMENTOS", deptos)
+        _insertar_seccion("USUARIOS", users)
 
         # Totals row
         if all_rows:
@@ -1401,25 +1435,13 @@ class DialogContabilidad(ctk.CTkToplevel):
             self._poblar()
 
     def _sort(self, col):
+        # Al ordenar, repoblar con el nuevo criterio para respetar secciones
         if self._sort_col == col:
             self._sort_rev = not self._sort_rev
         else:
             self._sort_col = col
             self._sort_rev = False
-        all_items = self.tree.get_children()
-        # Separar fila TOTAL (siempre al final)
-        total_items = [k for k in all_items if "totales" in self.tree.item(k, "tags")]
-        sort_items  = [k for k in all_items if k not in total_items]
-        rows = [(self.tree.set(k, col), k) for k in sort_items]
-        try:
-            rows.sort(key=lambda x: int(x[0]) if x[0] not in ("—","") else -1,
-                      reverse=self._sort_rev)
-        except Exception:
-            rows.sort(reverse=self._sort_rev)
-        for i, (_, k) in enumerate(rows):
-            self.tree.move(k, "", i)
-        for k in total_items:
-            self.tree.move(k, "", "end")
+        self._poblar()
 
 
 class _DialogCredencialesXSA(ctk.CTkToplevel):
