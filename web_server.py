@@ -1,0 +1,452 @@
+"""
+Fleet Monitor Pro — servidor web de solo lectura.
+Arranca con: python web_server.py
+Acceso desde la red: http://<ip-servidor>:5050
+"""
+import json, os, threading
+from datetime import datetime
+from flask import Flask, jsonify, render_template_string
+
+BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
+DB_FILE           = os.path.join(BASE_DIR, "impresoras.json")
+HISTORIAL_FILE    = os.path.join(BASE_DIR, "historial.json")
+CONTABILIDAD_FILE = os.path.join(BASE_DIR, "contabilidad_xsa.json")
+CONFIG_FILE       = os.path.join(BASE_DIR, "config.json")
+
+DEFAULT_CONFIG = {"umbral_critico": 15, "umbral_alerta": 20}
+
+app = Flask(__name__)
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+# ── API ────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/impresoras")
+def api_impresoras():
+    cfg       = {**DEFAULT_CONFIG, **_load(CONFIG_FILE, {})}
+    impres    = _load(DB_FILE, [])
+    historial = _load(HISTORIAL_FILE, {})
+    crit      = cfg["umbral_critico"]
+    alerta    = cfg["umbral_alerta"]
+
+    out = []
+    for imp in impres:
+        if isinstance(imp, str):
+            imp = {"ip": imp, "nombre": imp, "ubicacion": ""}
+        ip       = imp.get("ip", "")
+        registros = historial.get(ip, [])
+        ultimo    = registros[-1] if registros else None
+        cons      = ultimo["consumibles"] if ultimo else None
+        ts        = ultimo["ts"]         if ultimo else None
+
+        estado = "sin datos"
+        cons_list = []
+        if cons:
+            niveles = [c.get("porcentaje", 100) for c in cons]
+            min_niv = min(niveles) if niveles else 100
+            estado  = "critico" if min_niv <= crit else ("alerta" if min_niv <= alerta else "ok")
+            for c in cons:
+                pct = c.get("porcentaje", -1)
+                cons_list.append({
+                    "nombre": c.get("descripcion", c.get("nombre", "")),
+                    "pct":    pct,
+                    "estado": "critico" if pct <= crit else ("alerta" if pct <= alerta else "ok"),
+                })
+            cons_list.sort(key=lambda x: x["pct"])
+
+        out.append({
+            "nombre":    imp.get("nombre", ip),
+            "ip":        ip,
+            "ubicacion": imp.get("ubicacion", ""),
+            "estado":    estado,
+            "ts":        ts,
+            "consumibles": cons_list,
+        })
+
+    out.sort(key=lambda x: (
+        0 if x["estado"] == "critico" else
+        1 if x["estado"] == "alerta"  else
+        2 if x["estado"] == "ok"      else 3
+    ))
+    return jsonify(out)
+
+
+@app.route("/api/contabilidad")
+def api_contabilidad():
+    datos = _load(CONTABILIDAD_FILE, {})
+    DEPARTAMENTOS = {d.lower() for d in (
+        "ADMINISTRACIÓN","DIRECCIÓN","VICEDIRECCIÓN","SECRETARÍA",
+        "XEFATURA DE ESTUDOS","RECURSOS","ALEMÁN","PORTUGUÉS",
+        "FRANCÉS","ITALIANO","GALEGO","PLAMBE_EDLG","INGLÉS","SUSTITUTO",
+    )}
+    EXCLUIR = {u.lower() for u in (
+        "System User","CUENTA GENERAL","Customer Service Engineer Account",
+        "Xerox Administrative Group","Admin","Diagnostics","Local System User",
+        "Print Exceptions Group","10.55.161.196","Guest",
+        "IPP Exception Group","IPP Exception User",
+    )}
+
+    result = []
+    for ip, bloque in datos.items():
+        nombre_imp = bloque.get("nombre_impresora", ip)
+        snapshots  = bloque.get("snapshots", {})
+        sorted_keys = sorted(snapshots.keys())
+        if not sorted_keys:
+            continue
+        meses = sorted_keys  # para el selector en el front
+
+        result.append({
+            "ip":           ip,
+            "nombre":       nombre_imp,
+            "meses":        sorted_keys,
+            "snapshots":    snapshots,
+            "departamentos": list(DEPARTAMENTOS),
+            "excluir":       list(EXCLUIR),
+        })
+    return jsonify(result)
+
+
+# ── HTML ───────────────────────────────────────────────────────────────────────
+
+HTML = r"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Monitor Pro</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a1d2e;color:#e8eaf0;font-family:'Segoe UI',sans-serif;font-size:14px}
+a{color:inherit;text-decoration:none}
+
+/* HEADER */
+header{background:#232640;padding:12px 20px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #353860;position:sticky;top:0;z-index:100}
+header h1{font-size:17px;font-weight:700}
+header .ts{color:#8b92b8;font-size:12px;margin-left:auto}
+.badge{background:#2c3057;border-radius:6px;padding:4px 12px;font-size:12px;display:flex;flex-direction:column;align-items:center;min-width:70px}
+.badge .num{font-size:20px;font-weight:700;line-height:1.2}
+.badge .lbl{color:#8b92b8;font-size:10px}
+.col-ok{color:#2ecc71} .col-warn{color:#f39c12} .col-crit{color:#e74c3c} .col-off{color:#6c7a99}
+
+/* TABS */
+nav{background:#232640;display:flex;gap:2px;padding:0 16px;border-bottom:1px solid #353860}
+nav button{background:none;border:none;color:#8b92b8;padding:10px 18px;cursor:pointer;font-size:13px;font-family:inherit;border-bottom:2px solid transparent}
+nav button.active{color:#e8eaf0;border-bottom-color:#4f8ef7}
+nav button:hover{color:#e8eaf0}
+
+/* SECTIONS */
+section{display:none;padding:16px 20px}
+section.active{display:block}
+
+/* KPI row */
+.kpi-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+
+/* TABLES */
+table{width:100%;border-collapse:collapse}
+th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:8px 10px;text-align:left;position:sticky;top:52px}
+td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:middle}
+tr:hover td{background:#1e2238}
+tr.crit td{color:#e74c3c}
+tr.warn td{color:#f39c12}
+tr.off td{color:#6c7a99}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.dot-ok{background:#2ecc71} .dot-warn{background:#f39c12} .dot-crit{background:#e74c3c} .dot-off{background:#6c7a99}
+
+/* CONSUMIBLES */
+.cons-bars{display:flex;flex-direction:column;gap:3px;min-width:200px}
+.cons-item{display:flex;align-items:center;gap:6px;font-size:12px}
+.bar-bg{flex:1;background:#1a1d2e;border-radius:3px;height:6px;min-width:80px}
+.bar-fill{height:6px;border-radius:3px;transition:width .3s}
+.bar-ok{background:#2ecc71} .bar-warn{background:#f39c12} .bar-crit{background:#e74c3c}
+.cons-lbl{width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8b92b8}
+.cons-pct{width:34px;text-align:right;font-size:11px}
+
+/* CONTABILIDAD */
+.cont-controls{display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
+.cont-controls label{color:#8b92b8;font-size:12px}
+select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10px;border-radius:6px;font-size:13px;font-family:inherit}
+.sec-header td{background:#1c2a3a;color:#7ab4f5;font-weight:700;font-size:12px}
+.total-row td{background:#2c3057;font-weight:700;color:#4f8ef7}
+
+/* LOADER */
+.loader{text-align:center;padding:40px;color:#8b92b8}
+.spinner{display:inline-block;width:28px;height:28px;border:3px solid #353860;border-top-color:#4f8ef7;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* DETAIL PANEL */
+.detail-row td{background:#1e2238}
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:20px">🖨</span>
+  <h1>Fleet Monitor Pro</h1>
+  <div style="display:flex;gap:8px" id="kpi-badges"></div>
+  <span class="ts" id="last-update">Cargando...</span>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('impresoras',this)">Impresoras</button>
+  <button onclick="showTab('contabilidad',this)">Contabilidad</button>
+</nav>
+
+<section id="tab-impresoras" class="active">
+  <div id="imp-table-wrap"><div class="loader"><span class="spinner"></span>Cargando datos...</div></div>
+</section>
+
+<section id="tab-contabilidad">
+  <div class="cont-controls">
+    <label>Impresora:</label>
+    <select id="sel-imp" onchange="renderContabilidad()"></select>
+    <label>Mes:</label>
+    <select id="sel-mes" onchange="renderContabilidad()"></select>
+    <label>Vista:</label>
+    <select id="sel-vista" onchange="renderContabilidad()">
+      <option value="Acumulado">Acumulado</option>
+      <option value="Mensual">Mensual</option>
+    </select>
+  </div>
+  <div id="cont-table-wrap"><div class="loader"><span class="spinner"></span>Cargando...</div></div>
+</section>
+
+<script>
+let _impData = [];
+let _contData = [];
+
+function showTab(name, btn) {
+  document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'contabilidad' && _contData.length === 0) loadContabilidad();
+}
+
+// ── IMPRESORAS ────────────────────────────────────────────────────────────────
+async function loadImpresoras() {
+  try {
+    const r = await fetch('/api/impresoras');
+    _impData = await r.json();
+    renderImpresoras();
+  } catch(e) {
+    document.getElementById('imp-table-wrap').innerHTML =
+      '<div class="loader">Error cargando datos: ' + e + '</div>';
+  }
+}
+
+function renderImpresoras() {
+  const data = _impData;
+  let ok=0, warn=0, crit=0, off=0;
+  data.forEach(d => {
+    if(d.estado==='ok') ok++;
+    else if(d.estado==='alerta') warn++;
+    else if(d.estado==='critico') crit++;
+    else off++;
+  });
+  document.getElementById('kpi-badges').innerHTML = `
+    <div class="badge"><span class="num col-ok">${ok}</span><span class="lbl">En línea</span></div>
+    <div class="badge"><span class="num col-off">${off}</span><span class="lbl">Sin datos</span></div>
+    <div class="badge"><span class="num col-crit">${crit}</span><span class="lbl">Crítico</span></div>
+    <div class="badge"><span class="num col-warn">${warn}</span><span class="lbl">Alerta</span></div>
+  `;
+  document.getElementById('last-update').textContent =
+    'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
+
+  let rows = data.map(d => {
+    const cls = d.estado==='critico'?'crit':d.estado==='alerta'?'warn':d.estado==='sin datos'?'off':'';
+    const dotCls = d.estado==='critico'?'dot-crit':d.estado==='alerta'?'dot-warn':d.estado==='sin datos'?'dot-off':'dot-ok';
+    const ts = d.ts ? d.ts.slice(0,16) : '—';
+    const consBars = d.consumibles.length ? `
+      <div class="cons-bars">
+        ${d.consumibles.slice(0,6).map(c => `
+          <div class="cons-item">
+            <span class="cons-lbl">${esc(c.nombre)}</span>
+            <div class="bar-bg"><div class="bar-fill bar-${c.estado}" style="width:${Math.max(0,c.pct)}%"></div></div>
+            <span class="cons-pct ${c.estado==='critico'?'col-crit':c.estado==='alerta'?'col-warn':''}">${c.pct>=0?c.pct+'%':'?'}</span>
+          </div>`).join('')}
+      </div>` : '<span style="color:#6c7a99">Sin datos</span>';
+    return `<tr class="${cls}">
+      <td><span class="dot ${dotCls}"></span>${esc(d.nombre)}</td>
+      <td style="color:#8b92b8">${esc(d.ip)}</td>
+      <td style="color:#8b92b8">${esc(d.ubicacion||'')}</td>
+      <td>${consBars}</td>
+      <td style="color:#6c7a99;font-size:12px">${ts}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('imp-table-wrap').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Nombre</th><th>IP</th><th>Ubicación</th>
+        <th>Consumibles</th><th>Última lectura</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ── CONTABILIDAD ──────────────────────────────────────────────────────────────
+async function loadContabilidad() {
+  try {
+    const r = await fetch('/api/contabilidad');
+    _contData = await r.json();
+    populateContSelectors();
+    renderContabilidad();
+  } catch(e) {
+    document.getElementById('cont-table-wrap').innerHTML =
+      '<div class="loader">Error: ' + e + '</div>';
+  }
+}
+
+function populateContSelectors() {
+  const selImp = document.getElementById('sel-imp');
+  selImp.innerHTML = _contData.map((d,i) =>
+    `<option value="${i}">${esc(d.nombre)}</option>`).join('');
+  updateMesOptions();
+}
+
+function updateMesOptions() {
+  const idx = parseInt(document.getElementById('sel-imp').value||'0');
+  const imp = _contData[idx];
+  if (!imp) return;
+  const selMes = document.getElementById('sel-mes');
+  const meses = [...imp.meses].reverse();
+  selMes.innerHTML = '<option value="Acumulado">Acumulado</option>' +
+    meses.map(m => `<option value="${m}">${mesLabel(m)}</option>`).join('');
+}
+
+document.getElementById('sel-imp').addEventListener('change', () => {
+  updateMesOptions(); renderContabilidad();
+});
+
+function mesLabel(key) {
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+                 'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const [y, m] = key.split('-');
+  return `${meses[parseInt(m)-1]} ${y}`;
+}
+
+function renderContabilidad() {
+  const idx   = parseInt(document.getElementById('sel-imp').value||'0');
+  const mesV  = document.getElementById('sel-mes').value;
+  const vista = document.getElementById('sel-vista').value;
+  const imp   = _contData[idx];
+  if (!imp) return;
+
+  const sorted = [...imp.meses].sort();
+  const DEPTOS = new Set(imp.departamentos.map(d=>d.toLowerCase()));
+  const EXCL   = new Set(imp.excluir.map(d=>d.toLowerCase()));
+
+  // Snapshot actual y anterior
+  let curKey, prevKey = null;
+  if (mesV === 'Acumulado' || vista === 'Acumulado') {
+    curKey = sorted[sorted.length-1];
+  } else {
+    curKey = sorted.includes(mesV) ? mesV : sorted[sorted.length-1];
+    const idx2 = sorted.indexOf(curKey);
+    if (idx2 > 0) prevKey = sorted[idx2-1];
+  }
+  if (!curKey) { document.getElementById('cont-table-wrap').innerHTML='<div class="loader">Sin snapshots</div>'; return; }
+
+  const curSnap  = imp.snapshots[curKey]  || {usuarios:[]};
+  const prevSnap = prevKey ? imp.snapshots[prevKey] : null;
+  const prevMap  = prevSnap ? Object.fromEntries(prevSnap.usuarios.map(u=>[u.usuario,u])) : {};
+
+  let deptos=[], users=[];
+  for (const u of curSnap.usuarios) {
+    if (EXCL.has(u.usuario.toLowerCase())) continue;
+    const uid = u.id||'';
+    let ib=u.imp_bw, ic=u.imp_color, cb=u.cop_bw, cc=u.cop_color;
+    if (prevKey && prevMap[u.usuario]) {
+      const p = prevMap[u.usuario];
+      ib=Math.max(0,ib-p.imp_bw); ic=Math.max(0,ic-p.imp_color);
+      cb=Math.max(0,cb-p.cop_bw); cc=Math.max(0,cc-p.cop_color);
+    }
+    const total = ib+ic+cb+cc;
+    const label = uid ? `${u.usuario} (${uid})` : u.usuario;
+    const row = {label, ib, ic, cb, cc, total};
+    if (DEPTOS.has(u.usuario.toLowerCase())) deptos.push(row);
+    else users.push(row);
+  }
+  deptos.sort((a,b)=>b.total-a.total);
+  users.sort((a,b)=>b.total-a.total);
+
+  const hasColor = [...deptos,...users].some(r=>r.ic>0||r.cc>0);
+  const colColor = hasColor ? `<th>Imp. Color</th><th>Cop. Color</th>` : '';
+
+  function fRow(r, cls='') {
+    const color = hasColor ? `<td>${r.ic||'—'}</td><td>${r.cc||'—'}</td>` : '';
+    return `<tr class="${cls}">
+      <td>${esc(r.label)}</td>
+      <td>${r.ib||'—'}</td>${color}
+      <td>${r.cb||'—'}</td>
+      <td>${r.total||'—'}</td>
+    </tr>`;
+  }
+
+  function secHeader(titulo) {
+    const cols = 4 + (hasColor?2:0);
+    return `<tr class="sec-header"><td colspan="${cols}">▼  ${titulo}</td></tr>`;
+  }
+
+  const all = [...deptos,...users];
+  const totColor = hasColor ?
+    `<td>${all.reduce((s,r)=>s+r.ic,0)||'—'}</td><td>${all.reduce((s,r)=>s+r.cc,0)||'—'}</td>` : '';
+  const totalRow = `<tr class="total-row">
+    <td>TOTAL</td>
+    <td>${all.reduce((s,r)=>s+r.ib,0)||'—'}</td>${totColor}
+    <td>${all.reduce((s,r)=>s+r.cb,0)||'—'}</td>
+    <td>${all.reduce((s,r)=>s+r.total,0)||'—'}</td>
+  </tr>`;
+
+  const titulo = mesV==='Acumulado' ? 'Acumulado' : mesLabel(curKey);
+  document.getElementById('cont-table-wrap').innerHTML = `
+    <p style="color:#8b92b8;font-size:12px;margin-bottom:8px">
+      ${esc(imp.nombre)} — ${titulo} — ${vista}
+      &nbsp;·&nbsp; snapshot: ${curSnap.ts||'?'}
+      ${prevKey?'&nbsp;·&nbsp; mes anterior: '+mesLabel(prevKey):''}
+    </p>
+    <table>
+      <thead><tr>
+        <th>Usuario</th><th>Imp. B/N</th>${colColor}<th>Cop. B/N</th><th>Total</th>
+      </tr></thead>
+      <tbody>
+        ${deptos.length ? secHeader('DEPARTAMENTOS ('+deptos.length+')') + deptos.map(r=>fRow(r)).join('') : ''}
+        ${users.length  ? secHeader('USUARIOS ('      +users.length +')')  + users.map(r=>fRow(r)).join('') : ''}
+        ${totalRow}
+      </tbody>
+    </table>`;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── AUTO REFRESH ──────────────────────────────────────────────────────────────
+loadImpresoras();
+setInterval(loadImpresoras, 30000);  // refresca impresoras cada 30s
+</script>
+</body>
+</html>
+"""
+
+@app.route("/")
+def index():
+    return render_template_string(HTML)
+
+
+if __name__ == "__main__":
+    import socket
+    try:
+        ip_local = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        ip_local = "localhost"
+    print(f"\n  Fleet Monitor Pro — Servidor web")
+    print(f"  Local:  http://localhost:5050")
+    print(f"  Red:    http://{ip_local}:5050")
+    print(f"\n  Ctrl+C para detener\n")
+    app.run(host="0.0.0.0", port=5050, debug=False)
