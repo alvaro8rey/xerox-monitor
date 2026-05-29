@@ -299,6 +299,20 @@ def obtener_info_extra(ip, comunidad="public", timeout=2.0):
     try:    return asyncio.run(_snmp_info_extra(ip, comunidad, timeout))
     except: return {}
 
+def _formatear_uptime(raw):
+    """Convierte TimeTicks SNMP (centésimas de segundo) a texto legible."""
+    try:
+        centesimas = int(str(raw).replace(",", "").strip())
+        total_seg = centesimas // 100
+        dias = total_seg // 86400
+        horas = (total_seg % 86400) // 3600
+        minutos = (total_seg % 3600) // 60
+        if dias:
+            return f"{dias}d {horas:02d}h {minutos:02d}m"
+        return f"{horas}h {minutos:02d}m"
+    except Exception:
+        return str(raw)[:30]
+
 # ── ESCANEO DE RED ────────────────────────────────────────────────────────────
 def _parsear_rango(texto):
     """Devuelve lista de IPs a escanear desde CIDR, rango A-B o IP única."""
@@ -2305,7 +2319,7 @@ class App(ctk.CTk):
                         fila("Bandeja:", f"{bn}/{bc} hojas ({round(bn/bc*100)}%)")
                 except: pass
             if info.get("sys_uptime"):
-                fila("Uptime:", info["sys_uptime"][:30])
+                fila("Uptime:", _formatear_uptime(info["sys_uptime"]))
 
         # ── F) Sección CONSUMIBLES con barras ──
         sep_line()
@@ -2674,7 +2688,7 @@ class App(ctk.CTk):
             pag   = info.get("paginas","—")
             modelo= info.get("modelo","—")
             serial= info.get("serial","—")
-            uptime= info.get("sys_uptime","—")
+            uptime= _formatear_uptime(info["sys_uptime"]) if info.get("sys_uptime") else "—"
             cons  = cache.get("consumibles") or []
             if cons:
                 for c in cons:
