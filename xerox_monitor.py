@@ -754,6 +754,294 @@ class DialogConfig(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 # VENTANA PRINCIPAL
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# DIALOGO CONTABILIDAD POR USUARIO (XSA CSV)
+# ══════════════════════════════════════════════════════════════════════════════
+CONTABILIDAD_FILE = "contabilidad_xsa.json"
+
+class DialogContabilidad(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Contabilidad por usuario")
+        self.geometry("900x620")
+        self.minsize(700, 480)
+        self.configure(fg_color=BG2)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+        self._datos = cargar_json(CONTABILIDAD_FILE, {})  # {ip: {usuario: {cols}}}
+        self._build()
+
+    def _build(self):
+        # ── Toolbar del diálogo ──
+        tb = ctk.CTkFrame(self, fg_color=BG3, height=44, corner_radius=0)
+        tb.pack(fill="x")
+        tb.pack_propagate(False)
+
+        ctk.CTkLabel(tb, text="Contabilidad por usuario — Xerox Standard Accounting",
+                     font=("Segoe UI", 12, "bold"), text_color=TEXT).pack(side="left", padx=14)
+
+        ctk.CTkButton(tb, text="↓  Importar CSV", width=130, height=30,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 11, "bold"),
+                      command=self._importar_csv).pack(side="right", padx=6, pady=7)
+        ctk.CTkButton(tb, text="🗑  Limpiar datos", width=120, height=30,
+                      fg_color=BG2, hover_color=BORDER, text_color=TEXT2,
+                      font=("Segoe UI", 11),
+                      command=self._limpiar).pack(side="right", padx=2, pady=7)
+
+        self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
+        self.lbl_info.pack(anchor="w", padx=14, pady=(6, 2))
+
+        # ── Tabla ──
+        tbl_frame = ctk.CTkFrame(self, fg_color=BG2, corner_radius=0)
+        tbl_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        style = ttk.Style()
+        cols = ("impresora", "usuario", "imp_bw", "imp_color",
+                "cop_bw", "cop_color", "scan", "total")
+        self.tree = ttk.Treeview(tbl_frame, columns=cols,
+                                  show="headings", style="F.Treeview", selectmode="browse")
+        for col, hdr, w, stretch in [
+            ("impresora", "Impresora",      160, True),
+            ("usuario",   "Usuario",        150, True),
+            ("imp_bw",    "Imp. B/N",        80, False),
+            ("imp_color", "Imp. Color",      80, False),
+            ("cop_bw",    "Cop. B/N",        80, False),
+            ("cop_color", "Cop. Color",      80, False),
+            ("scan",      "Escaneos",        80, False),
+            ("total",     "Total páginas",  100, False),
+        ]:
+            self.tree.heading(col, text=hdr,
+                              command=lambda c=col: self._sort(c))
+            self.tree.column(col, width=w, anchor="center" if col not in ("impresora","usuario") else "w",
+                             stretch=stretch)
+
+        vsb = ttk.Scrollbar(tbl_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.tree.pack(fill="both", expand=True)
+
+        self.tree.tag_configure("par",    background=BG2,     foreground=TEXT)
+        self.tree.tag_configure("impar",  background=ROW_ALT, foreground=TEXT)
+        self.tree.tag_configure("top",    background="#1a2e1a", foreground=OK)
+
+        self._sort_col = None
+        self._sort_rev = False
+        self._poblar()
+
+    def _importar_csv(self):
+        from tkinter.filedialog import askopenfilename
+        path = askopenfilename(
+            title="Selecciona el CSV de Contabilidad Estándar Xerox",
+            filetypes=[("CSV", "*.csv"), ("Todos", "*.*")])
+        if not path:
+            return
+
+        # Pedir a qué impresora pertenece este CSV
+        ips = []
+        try:
+            parent_app = self.master
+            ips = [f"{i['nombre']} ({i['ip']})" for i in parent_app.impresoras]
+        except Exception:
+            pass
+
+        dlg = _DialogSeleccionarImpresora(self, ips)
+        self.wait_window(dlg)
+        if not dlg.resultado:
+            return
+        ip_label = dlg.resultado  # "Nombre (IP)" o IP directa
+        # Extraer IP
+        import re
+        m = re.search(r'\(([^)]+)\)', ip_label)
+        ip_key = m.group(1) if m else ip_label
+
+        try:
+            filas = self._parsear_csv(path)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo leer el CSV:\n{e}")
+            return
+
+        if not filas:
+            messagebox.showwarning("CSV vacío", "No se encontraron datos de usuario en el archivo.")
+            return
+
+        self._datos[ip_key] = {
+            "nombre_impresora": ip_label,
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "usuarios": filas
+        }
+        guardar_json(CONTABILIDAD_FILE, self._datos)
+        self._poblar()
+        messagebox.showinfo("Importado", f"✔  {len(filas)} usuarios importados de:\n{os.path.basename(path)}")
+
+    def _parsear_csv(self, path):
+        """
+        Parsea el CSV de XSA. Xerox exporta formatos distintos según firmware.
+        Intenta detectar columnas automáticamente.
+        """
+        import io
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+            contenido = f.read()
+
+        # Probar delimitadores: ; y ,
+        for sep in (";", ",", "\t"):
+            reader = csv.DictReader(io.StringIO(contenido), delimiter=sep)
+            try:
+                filas = list(reader)
+                if filas and len(filas[0]) > 2:
+                    break
+            except Exception:
+                filas = []
+
+        if not filas:
+            return []
+
+        # Normalizar nombres de columna (Xerox usa distintos idiomas)
+        MAP_COLS = {
+            # ES
+            "nombre de usuario": "usuario", "nombre usuario": "usuario",
+            "usuario": "usuario", "id de usuario": "id", "id usuario": "id",
+            "impresiones en b/n": "imp_bw", "impresiones b/n": "imp_bw",
+            "impresiones en color": "imp_color", "impresiones color": "imp_color",
+            "copias en b/n": "cop_bw", "copias b/n": "cop_bw",
+            "copias en color": "cop_color", "copias color": "cop_color",
+            "escaneados": "scan", "escáner": "scan", "escaneos": "scan",
+            "total": "total",
+            # EN
+            "user name": "usuario", "username": "usuario", "user id": "id",
+            "black and white prints": "imp_bw", "b&w prints": "imp_bw",
+            "color prints": "imp_color",
+            "black and white copies": "cop_bw", "b&w copies": "cop_bw",
+            "color copies": "cop_color",
+            "scans": "scan", "scan images": "scan",
+            "fax images": "fax",
+        }
+
+        def norm(k):
+            return MAP_COLS.get(k.lower().strip(), k.lower().strip())
+
+        resultado = []
+        for fila in filas:
+            row = {norm(k): v.strip() for k, v in fila.items() if v}
+            if not row.get("usuario"):
+                continue
+            def safe_int(k):
+                try: return int(row.get(k, "0").replace(",", "").replace(".", "") or 0)
+                except: return 0
+            imp_bw    = safe_int("imp_bw")
+            imp_color = safe_int("imp_color")
+            cop_bw    = safe_int("cop_bw")
+            cop_color = safe_int("cop_color")
+            scan      = safe_int("scan")
+            total = imp_bw + imp_color + cop_bw + cop_color
+            resultado.append({
+                "usuario":   row["usuario"],
+                "id":        row.get("id", ""),
+                "imp_bw":    imp_bw,
+                "imp_color": imp_color,
+                "cop_bw":    cop_bw,
+                "cop_color": cop_color,
+                "scan":      scan,
+                "total":     total,
+            })
+
+        resultado.sort(key=lambda r: r["total"], reverse=True)
+        return resultado
+
+    def _poblar(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        if not self._datos:
+            self.lbl_info.configure(text="Sin datos. Usa Herramientas → Contabilidad por usuario → Importar CSV.")
+            return
+
+        total_filas = 0
+        alt = False
+        for ip_key, bloque in self._datos.items():
+            nombre_imp = bloque.get("nombre_impresora", ip_key)
+            ts         = bloque.get("ts", "")
+            usuarios   = bloque.get("usuarios", [])
+            for i, u in enumerate(usuarios):
+                tag = "top" if i == 0 else ("par" if alt else "impar")
+                alt = not alt
+                self.tree.insert("", "end", values=(
+                    nombre_imp,
+                    u["usuario"],
+                    u["imp_bw"]    or "—",
+                    u["imp_color"] or "—",
+                    u["cop_bw"]    or "—",
+                    u["cop_color"] or "—",
+                    u["scan"]      or "—",
+                    u["total"]     or "—",
+                ), tags=(tag,))
+                total_filas += 1
+
+        ts_all = ", ".join(
+            f"{b.get('nombre_impresora', k)}: {b.get('ts','?')}"
+            for k, b in self._datos.items()
+        )
+        self.lbl_info.configure(
+            text=f"{total_filas} usuarios cargados  |  Última importación: {ts_all}")
+
+    def _limpiar(self):
+        if messagebox.askyesno("Limpiar", "¿Eliminar todos los datos de contabilidad cargados?"):
+            self._datos = {}
+            guardar_json(CONTABILIDAD_FILE, self._datos)
+            self._poblar()
+
+    def _sort(self, col):
+        if self._sort_col == col:
+            self._sort_rev = not self._sort_rev
+        else:
+            self._sort_col = col
+            self._sort_rev = False
+        rows = [(self.tree.set(k, col), k) for k in self.tree.get_children()]
+        try:
+            rows.sort(key=lambda x: int(x[0]) if x[0] not in ("—","") else -1,
+                      reverse=self._sort_rev)
+        except Exception:
+            rows.sort(reverse=self._sort_rev)
+        for i, (_, k) in enumerate(rows):
+            self.tree.move(k, "", i)
+
+
+class _DialogSeleccionarImpresora(ctk.CTkToplevel):
+    def __init__(self, parent, opciones):
+        super().__init__(parent)
+        self.resultado = None
+        self.title("¿A qué impresora pertenece este CSV?")
+        self.geometry("400x280")
+        self.configure(fg_color=BG2)
+        self.grab_set(); self.lift(); self.focus_force()
+
+        ctk.CTkLabel(self, text="Selecciona la impresora origen del CSV:",
+                     font=("Segoe UI", 12), text_color=TEXT).pack(pady=(20, 8))
+
+        self.var = tk.StringVar(value=opciones[0] if opciones else "")
+        if opciones:
+            for op in opciones:
+                ctk.CTkRadioButton(self, text=op, variable=self.var, value=op,
+                                   text_color=TEXT, font=("Segoe UI", 11)).pack(anchor="w", padx=30, pady=3)
+        else:
+            ctk.CTkEntry(self, textvariable=self.var,
+                         placeholder_text="IP de la impresora",
+                         width=300, fg_color=BG3, border_color=BORDER,
+                         text_color=TEXT).pack(pady=8)
+
+        ctk.CTkButton(self, text="✔  Confirmar", width=140, height=34,
+                      fg_color=ACCENT, text_color=TEXT,
+                      font=("Segoe UI", 12, "bold"),
+                      command=self._ok).pack(pady=(16, 4))
+
+    def _ok(self):
+        self.resultado = self.var.get().strip()
+        self.destroy()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -797,6 +1085,8 @@ class App(ctk.CTk):
                           activebackground=ACCENT, activeforeground=TEXT)
         m_tools.add_command(label="Exportar...", command=self._exportar_todo)
         m_tools.add_separator()
+        m_tools.add_command(label="Contabilidad por usuario...", command=self._abrir_contabilidad)
+        m_tools.add_separator()
         m_tools.add_command(label="Configuración", command=self._abrir_config)
         menubar.add_cascade(label="Herramientas", menu=m_tools)
 
@@ -827,6 +1117,9 @@ class App(ctk.CTk):
     def _acerca_de(self):
         messagebox.showinfo("Acerca de Fleet Monitor Pro",
                             "Fleet Monitor Pro\nVersión 1.0\n\nMonitorización de consumibles de impresoras vía SNMP.")
+
+    def _abrir_contabilidad(self):
+        DialogContabilidad(self)
 
     def _build_ui_rest(self):
         # ── KPI bar ──
