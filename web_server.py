@@ -53,7 +53,7 @@ def api_impresoras():
             for c in cons:
                 pct = c.get("porcentaje", -1)
                 cons_list.append({
-                    "nombre": c.get("descripcion", c.get("nombre", "")),
+                    "nombre": c.get("componente", c.get("descripcion", c.get("nombre", ""))),
                     "pct":    pct,
                     "estado": "critico" if pct <= crit else ("alerta" if pct <= alerta else "ok"),
                 })
@@ -163,7 +163,7 @@ tr.off td{color:#6c7a99}
 .bar-bg{flex:1;background:#1a1d2e;border-radius:3px;height:6px;min-width:80px}
 .bar-fill{height:6px;border-radius:3px;transition:width .3s}
 .bar-ok{background:#2ecc71} .bar-warn{background:#f39c12} .bar-crit{background:#e74c3c}
-.cons-lbl{width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8b92b8}
+.cons-lbl{width:150px;min-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#c8cae0}
 .cons-pct{width:34px;text-align:right;font-size:11px}
 
 /* CONTABILIDAD */
