@@ -5,6 +5,8 @@ import json, os, asyncio, socket, threading, csv, ipaddress
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+_historial_lock = threading.Lock()
+
 # ── SNMP ──────────────────────────────────────────────────────────────────────
 SNMP_OK = False
 SNMP_ERROR = ""
@@ -91,8 +93,15 @@ BORDER  = "#353860"
 # ── PERSISTENCIA ──────────────────────────────────────────────────────────────
 def cargar_json(path, default):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            # Archivo corrupto: renombrarlo y empezar limpio
+            try:
+                os.rename(path, path + ".corrupto")
+            except OSError:
+                pass
     return default
 
 def guardar_json(path, data):
@@ -110,13 +119,14 @@ def cargar_impresoras():
     return out
 
 def guardar_historial(ip, consumibles):
-    h = cargar_json(HISTORIAL_FILE, {})
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if ip not in h:
-        h[ip] = []
-    h[ip].append({"ts": ts, "consumibles": consumibles})
-    h[ip] = h[ip][-100:]
-    guardar_json(HISTORIAL_FILE, h)
+    with _historial_lock:
+        h = cargar_json(HISTORIAL_FILE, {})
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if ip not in h:
+            h[ip] = []
+        h[ip].append({"ts": ts, "consumibles": consumibles})
+        h[ip] = h[ip][-100:]
+        guardar_json(HISTORIAL_FILE, h)
 
 # ── SNMP ──────────────────────────────────────────────────────────────────────
 def limpiar_nombre(n):
