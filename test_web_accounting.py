@@ -1,8 +1,8 @@
 """
-Descarga CSV XSA Xerox AltaLink C8170 — login con CSRFToken correcto.
+Debug del formulario de login Xerox AltaLink C8170.
 Uso: python test_web_accounting.py
 """
-import requests, re, time
+import requests, re
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
@@ -11,120 +11,87 @@ USER     = "admin"
 PASSWORD = input("Contraseña admin: ").strip()
 BASE     = f"https://{IP}"
 REDIR    = "/properties/accounting/usageReport.php?from=Acct_Home"
+LOGIN    = f"/properties/authentication/login.php?redir={REDIR}"
 
 s = requests.Session()
 s.verify  = False
 s.timeout = 15
 s.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
     "Accept-Language": "es-ES,es;q=0.9",
 })
 
-def show(r, desc):
-    ct = r.headers.get("Content-Type","")[:35]
-    print(f"  [{r.status_code}] {desc}  ({len(r.content):,} bytes)  {ct}")
-    return r
+print(f"\n{'='*60}\n  Debug login  |  {BASE}\n{'='*60}\n")
 
-print(f"\n{'='*60}\n  XSA Download  |  {BASE}\n{'='*60}\n")
+# ── 1. GET login page ─────────────────────────────────────────────────────────
+r = s.get(BASE + LOGIN, allow_redirects=True)
+print(f"[{r.status_code}] GET login.php  → {r.url}")
 
-# ── 1. GET página de login para obtener CSRFToken ─────────────────────────────
-print("── Paso 1: obtener CSRFToken de la página de login...")
-LOGIN_PAGE = f"/properties/authentication/login.php?redir={REDIR}"
-r = s.get(BASE + LOGIN_PAGE, allow_redirects=True)
-show(r, "GET login.php")
-print(f"    URL final: {r.url}")
-print(f"    Cookies: {dict(s.cookies)}")
+# Extraer TODOS los inputs del form
+all_inputs = re.findall(
+    r'<input([^>]*)>', r.text, re.I | re.S)
+print("\n── Todos los <input> del formulario:")
+form_data = {}
+for inp in all_inputs:
+    name  = re.search(r'name=["\']([^"\']*)["\']',  inp, re.I)
+    value = re.search(r'value=["\']([^"\']*)["\']', inp, re.I)
+    type_ = re.search(r'type=["\']([^"\']*)["\']',  inp, re.I)
+    if name:
+        n = name.group(1)
+        v = value.group(1) if value else ""
+        t = type_.group(1) if type_ else "text"
+        print(f"  name={n!r:<30} type={t:<10} value={v[:60]!r}")
+        form_data[n] = v
 
-# Extraer CSRFToken del HTML
-csrf = re.search(r'name=["\']CSRFToken["\'][^>]*value=["\']([^"\']+)["\']', r.text)
-if not csrf:
-    csrf = re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']CSRFToken["\']', r.text)
-csrf_token = csrf.group(1) if csrf else ""
-print(f"    CSRFToken: {csrf_token!r}")
+# Extraer action del form
+form_action = re.search(r'<form[^>]*action=["\']([^"\']*)["\']', r.text, re.I)
+print(f"\n── Form action: {form_action.group(1) if form_action else 'NO ENCONTRADO'}")
 
-# Extraer otros campos hidden
-nextpage = re.search(r'name=["\']NextPage["\'][^>]*value=["\']([^"\']*)["\']', r.text)
-nextpage_val = nextpage.group(1) if nextpage else REDIR
+# ── 2. Construir payload completo con todos los campos ────────────────────────
+# Sobreescribir los campos de credenciales
+form_data["frmwebUsername"] = USER
+form_data["frmwebPassword"] = PASSWORD
+# Forzar NextPage correcto
+form_data["NextPage"]       = REDIR
 
-# ── 2. POST login con campos correctos ────────────────────────────────────────
-print("\n── Paso 2: POST login a /userpost/xerox.set...")
-payload = {
-    "fred":           "",           # honeypot Xerox, debe ir vacío
-    "_fun_function":  "HTTP_Authenticate_Function",
-    "NextPage":       nextpage_val or REDIR,
-    "frmwebUsername": USER,
-    "frmwebPassword": PASSWORD,
-    "frmaltDomain":   "",
-    "CSRFToken":      csrf_token,
-}
-print(f"    Payload: { {k: v for k,v in payload.items() if k != 'frmwebPassword'} }")
+print(f"\n── Payload completo a enviar:")
+for k, v in form_data.items():
+    val_display = v[:80] if k != "frmwebPassword" else "***"
+    print(f"  {k:<30} = {val_display!r}")
 
-r = s.post(BASE + "/userpost/xerox.set", data=payload,
-           headers={"Referer": BASE + LOGIN_PAGE},
-           allow_redirects=True)
-show(r, "POST /userpost/xerox.set")
-print(f"    URL final: {r.url}")
-print(f"    Cookies tras login: {dict(s.cookies)}")
-print(f"    Respuesta (primeros 300 chars): {r.text[:300]!r}")
+# ── 3. POST ───────────────────────────────────────────────────────────────────
+action = form_action.group(1) if form_action else "/userpost/xerox.set"
+if not action.startswith("http"):
+    action = BASE + action
 
-# ── 3. Verificar sesión accediendo a usageReport ──────────────────────────────
-print("\n── Paso 3: verificar sesión en usageReport.php...")
-r = s.get(BASE + REDIR, headers={"Referer": BASE + "/"}, allow_redirects=True)
-show(r, "GET usageReport.php")
-print(f"    URL final: {r.url}")
-autenticado = "login.php" not in r.url and r.status_code == 200
-print(f"    ¿Autenticado? {'✔ SÍ' if autenticado else '✘ NO (redirige a login)'}")
-if not autenticado:
-    print(f"    Primeros 200 chars: {r.text[:200]!r}")
+print(f"\n── POST → {action}")
+r2 = s.post(action, data=form_data,
+            headers={"Referer": BASE + LOGIN,
+                     "Origin":  BASE},
+            allow_redirects=True)
+print(f"[{r2.status_code}] URL final: {r2.url}")
+print(f"Cookies: {dict(s.cookies)}")
+print(f"Respuesta completa ({len(r2.text)} bytes):\n{r2.text[:500]!r}")
 
-# ── 4. Generar fecha del informe ───────────────────────────────────────────────
-print("\n── Paso 4: XSA_generate_date.php...")
-r = s.get(BASE + "/properties/accounting/XSA_generate_date.php",
-          headers={"Referer": BASE + REDIR}, allow_redirects=True)
-show(r, "XSA_generate_date.php")
-is_csv_response = not r.text.strip().startswith("<")
-print(f"    Respuesta: {r.text[:150]!r}")
-
-# ── 5. Descargar CSV ───────────────────────────────────────────────────────────
-print("\n── Paso 5: download_csv.php...")
-r = s.get(BASE + "/properties/accounting/download_csv.php",
-          headers={"Referer": BASE + REDIR}, allow_redirects=True)
-show(r, "download_csv.php")
-ct = r.headers.get("Content-Type","")
-cd = r.headers.get("Content-Disposition","")
-print(f"    Content-Type: {ct}")
-print(f"    Content-Disposition: {cd}")
-
-es_csv = ("csv" in ct.lower() or "octet" in ct.lower() or
-          cd or not r.text.strip().startswith("<"))
-
-if es_csv and len(r.content) > 100:
-    with open("xsa_report.csv", "wb") as f:
-        f.write(r.content)
-    print(f"\n  ✔ CSV guardado: xsa_report.csv ({len(r.content):,} bytes)")
-    print(f"\n  Primeras líneas:\n{r.text[:600]}")
+# ── 4. Verificar sesión ───────────────────────────────────────────────────────
+print(f"\n── Verificando sesión...")
+r3 = s.get(BASE + REDIR, headers={"Referer": BASE + "/"})
+print(f"[{r3.status_code}] → {r3.url}")
+if "login.php" not in r3.url:
+    print("✔  AUTENTICADO — intentando descargar CSV...")
+    s.get(BASE + "/properties/accounting/XSA_generate_date.php",
+          headers={"Referer": BASE + REDIR})
+    r4 = s.get(BASE + "/properties/accounting/download_csv.php",
+               headers={"Referer": BASE + REDIR})
+    print(f"[{r4.status_code}] download_csv — {r4.headers.get('Content-Type','')} — {len(r4.content)} bytes")
+    if not r4.text.strip().startswith("<"):
+        with open("xsa_report.csv","wb") as f: f.write(r4.content)
+        print(f"✔  CSV guardado: {r4.text[:400]}")
+    else:
+        print(f"Sigue siendo HTML: {r4.text[:200]!r}")
 else:
-    with open("debug_step5.html", "w", encoding="utf-8", errors="replace") as f:
-        f.write(r.text)
-    print(f"\n  ✘ Sigue siendo HTML. Guardado debug_step5.html")
-
-    # ── Intentar variantes de la URL de descarga ──────────────────────────────
-    print("\n── Probando variantes de URL de descarga...")
-    for url in [
-        "/properties/accounting/download_csv.php?type=xsa",
-        "/properties/accounting/download_csv.php?report=xsa",
-        "/properties/accounting/XSAreport.csv",
-        "/properties/accounting/getReport.php",
-        "/properties/accounting/exportReport.php",
-    ]:
-        r2 = s.get(BASE + url, headers={"Referer": BASE + REDIR})
-        show(r2, url)
-        if r2.status_code == 200 and not r2.text.strip().startswith("<"):
-            with open("xsa_report.csv", "wb") as f:
-                f.write(r2.content)
-            print(f"  ✔ CSV en {url}!")
-            print(r2.text[:400])
-            break
-
-print(f"\n{'='*60}\n")
+    print("✘  Sigue sin autenticar.")
+    print("\n>>> ACCIÓN NECESARIA: abre F12 → Red en el navegador, inicia")
+    print(">>> sesión manualmente y busca POST /userpost/xerox.set.")
+    print(">>> Copia todos los campos del payload y compártelos.")
