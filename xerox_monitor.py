@@ -1371,6 +1371,7 @@ class DialogContabilidad(ctk.CTkToplevel):
         if messagebox.askyesno("Limpiar", "¿Eliminar todos los datos de contabilidad cargados?"):
             self._datos = {}
             guardar_json(CONTABILIDAD_FILE, self._datos)
+            self._refresh_controls()
             self._poblar()
 
     def _sort(self, col):
@@ -1505,10 +1506,12 @@ class App(ctk.CTk):
         self.sel_ip     = None
         self._scan_thread = None
         self._autoref_job = None
+        self._reminder_shown = False
 
         self._build_ui()
         self._poblar_tabla()
         self._schedule_autoref()
+        self._check_monthly_reminder()
 
         if not SNMP_OK:
             messagebox.showerror("Error SNMP", f"No se pudo cargar pysnmp:\n{SNMP_ERROR}\n\nEjecuta: pip install pysnmp")
@@ -1567,6 +1570,26 @@ class App(ctk.CTk):
 
     def _abrir_contabilidad(self):
         DialogContabilidad(self)
+
+    def _check_monthly_reminder(self):
+        if self._reminder_shown:
+            return
+        now = datetime.now()
+        if now.day != 1:
+            return
+        mes_actual = now.strftime("%Y-%m")
+        datos = cargar_json(CONTABILIDAD_FILE, {})
+        if not datos:
+            return
+        for ip_key, bloque in datos.items():
+            snapshots = bloque.get("snapshots", {})
+            if mes_actual not in snapshots:
+                self._reminder_shown = True
+                messagebox.showinfo(
+                    "Recordatorio mensual",
+                    "Recordatorio: Hoy es el 1 de mes. Descarga el informe XSA para registrar "
+                    "el consumo mensual (Herramientas → Contabilidad).")
+                return
 
     def _build_ui_rest(self):
         # ── KPI bar ──
