@@ -8,8 +8,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PIL_OK = False
 try:
-    from PIL import Image as PILImage, ImageTk
+    from PIL import Image as PILImage, ImageTk, ImageDraw
     PIL_OK = True
+except ImportError:
+    pass
+
+TRAY_OK = False
+try:
+    import pystray
+    TRAY_OK = True
 except ImportError:
     pass
 
@@ -1859,9 +1866,59 @@ class App(ctk.CTk):
         self._schedule_autoref()
         self._schedule_xsa_autodownload()
         self._check_monthly_reminder()
+        self._setup_tray()
 
         if not SNMP_OK:
             messagebox.showerror("Error SNMP", f"No se pudo cargar pysnmp:\n{SNMP_ERROR}\n\nEjecuta: pip install pysnmp")
+
+    # ── SYSTEM TRAY ───────────────────────────────────────────────────────────
+    def _setup_tray(self):
+        if not TRAY_OK or not PIL_OK:
+            # Sin pystray: cerrar ventana termina la app normalmente
+            return
+
+        # Crear icono 64×64 con la letra "F" (Fleet)
+        img = PILImage.new("RGBA", (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([0, 0, 63, 63], fill="#4f8ef7")
+        draw.text((18, 14), "F", fill="white")
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Mostrar Fleet Monitor", self._tray_mostrar, default=True),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Salir", self._tray_salir),
+        )
+        self._tray_icon = pystray.Icon("FleetMonitor", img, "Fleet Monitor Pro", menu)
+
+        # Interceptar el botón X → minimizar a bandeja
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Arrancar el icono en su propio hilo
+        t = threading.Thread(target=self._tray_icon.run, daemon=True)
+        t.start()
+
+    def _on_close(self):
+        """Cerrar ventana → ocultar a bandeja."""
+        self.withdraw()
+
+    def _tray_mostrar(self, icon=None, item=None):
+        """Doble clic o "Mostrar" → restaurar ventana."""
+        self.after(0, self._restaurar_ventana)
+
+    def _restaurar_ventana(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        try:
+            self.wm_state("zoomed")
+        except Exception:
+            pass
+
+    def _tray_salir(self, icon=None, item=None):
+        """Salir de verdad desde el menú de bandeja."""
+        if TRAY_OK and hasattr(self, "_tray_icon"):
+            self._tray_icon.stop()
+        self.after(0, self.destroy)
 
     # ── BUILD UI ──────────────────────────────────────────────────────────────
     def _cargar_cache_historial(self):
