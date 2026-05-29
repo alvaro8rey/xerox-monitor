@@ -218,6 +218,8 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 
 <!-- PIN MODAL — bloquea toda la página hasta autenticarse -->
 <div class="pin-overlay show" id="pin-overlay">
+  <!-- input invisible para capturar el foco del teclado nada más cargar la página -->
+  <input id="pin-focus-trap" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none" autofocus>
   <div class="pin-box">
     <h2>🔒 Fleet Monitor Pro</h2>
     <p>Introduce el PIN para acceder</p>
