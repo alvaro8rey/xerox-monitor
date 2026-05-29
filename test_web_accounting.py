@@ -79,8 +79,10 @@ rp = s.post(f"{BASE}/userpost/xerox.set?ajts{_ts}",
                 "Content-Type":      "application/x-www-form-urlencoded; charset=UTF-8",
             },
             data={
-                "_fun_function":  "XSA_Generate_fn",
+                "_fun_function":  "HTTP_Generate_XSA_Usage_Report_fn",
                 "CSRFToken":      csrf2_val,
+                "ShowUserId":     "TRUE",
+                "isAjax":         "true",
             })
 print(f"  [{rp.status_code}] Content-Type: {rp.headers.get('Content-Type','')}")
 print(f"  Body: {rp.text[:300]!r}")
