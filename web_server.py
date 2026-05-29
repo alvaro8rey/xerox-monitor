@@ -419,6 +419,11 @@ async function loadContabilidad() {
   try {
     const r = await fetch('/api/contabilidad');
     _contData = await r.json();
+    if (_contData.length === 0) {
+      document.getElementById('cont-table-wrap').innerHTML =
+        '<div class="loader" style="color:#6c7a99">Sin datos de contabilidad.<br>Importa un CSV desde la aplicación de escritorio.</div>';
+      return;
+    }
     populateContSelectors();
     renderContabilidad();
   } catch(e) {
