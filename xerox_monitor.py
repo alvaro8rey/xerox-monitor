@@ -1609,7 +1609,7 @@ class App(ctk.CTk):
 
         self.cfg        = {**DEFAULT_CONFIG, **cargar_json(CONFIG_FILE, {})}
         self.impresoras = cargar_impresoras()
-        self.cache      = {}
+        self.cache      = self._cargar_cache_historial()
         self.sel_ip     = None
         self._scan_thread = None
         self._autoref_job = None
@@ -1624,6 +1624,29 @@ class App(ctk.CTk):
             messagebox.showerror("Error SNMP", f"No se pudo cargar pysnmp:\n{SNMP_ERROR}\n\nEjecuta: pip install pysnmp")
 
     # ── BUILD UI ──────────────────────────────────────────────────────────────
+    def _cargar_cache_historial(self):
+        """Precarga la caché con el último registro guardado de cada impresora."""
+        historial = cargar_json(HISTORIAL_FILE, {})
+        cache = {}
+        for imp in self.impresoras:
+            ip = imp["ip"]
+            registros = historial.get(ip, [])
+            if registros:
+                ultimo = registros[-1]
+                ts_str = ultimo.get("ts", "")
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    ts = None
+                cache[ip] = {
+                    "consumibles": ultimo.get("consumibles"),
+                    "error":       None,
+                    "ts":          ts,
+                    "estado":      "ok",   # se actualizará en el primer scan
+                    "info":        {},
+                }
+        return cache
+
     def _build_ui(self):
         # ── Menubar nativo ──
         menubar = tk.Menu(self, bg=BG2, fg=TEXT, activebackground=ACCENT,
@@ -2150,7 +2173,12 @@ class App(ctk.CTk):
             self._autoref_job = self.after(seg * 1000, self._tick_autoref)
 
     def _tick_autoref(self):
-        self._refrescar_todo()
+        # No borrar caché: los datos anteriores permanecen hasta que lleguen los nuevos
+        if self._scan_thread and self._scan_thread.is_alive():
+            self._schedule_autoref()
+            return
+        self._scan_thread = threading.Thread(target=self._scan_worker, daemon=True)
+        self._scan_thread.start()
         self._schedule_autoref()
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
