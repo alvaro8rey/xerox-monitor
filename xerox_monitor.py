@@ -13,6 +13,15 @@ try:
 except ImportError:
     pass
 
+REQUESTS_OK = False
+try:
+    import requests as _requests
+    from requests.packages.urllib3.exceptions import InsecureRequestWarning
+    _requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+    REQUESTS_OK = True
+except ImportError:
+    pass
+
 _historial_lock = threading.Lock()
 
 # ── SNMP ──────────────────────────────────────────────────────────────────────
@@ -757,7 +766,28 @@ class DialogConfig(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 # DIALOGO CONTABILIDAD POR USUARIO (XSA CSV)
 # ══════════════════════════════════════════════════════════════════════════════
-CONTABILIDAD_FILE = "contabilidad_xsa.json"
+CONTABILIDAD_FILE   = "contabilidad_xsa.json"
+XSA_PATH_GENERATE   = "/properties/accounting/XSA_generate_date.php"
+XSA_PATH_DOWNLOAD   = "/properties/accounting/download_csv.php"
+
+def _xsa_descargar_csv(ip, password, usuario="admin", timeout=12):
+    """Descarga el CSV XSA vía HTTPS Basic Auth. Devuelve (texto_csv, error)."""
+    if not REQUESTS_OK:
+        return None, "Instala requests:  pip install requests"
+    try:
+        s = _requests.Session()
+        s.verify  = False
+        s.auth    = (usuario, password)
+        s.timeout = timeout
+        s.headers.update({"User-Agent": "Mozilla/5.0"})
+        base = f"https://{ip}"
+        s.get(base + XSA_PATH_GENERATE, allow_redirects=True)
+        r = s.get(base + XSA_PATH_DOWNLOAD, allow_redirects=True)
+        if r.status_code == 200 and len(r.content) > 50:
+            return r.text, None
+        return None, f"HTTP {r.status_code} al descargar CSV"
+    except Exception as e:
+        return None, str(e)
 
 class DialogContabilidad(ctk.CTkToplevel):
     def __init__(self, parent):
@@ -782,14 +812,18 @@ class DialogContabilidad(ctk.CTkToplevel):
         ctk.CTkLabel(tb, text="Contabilidad por usuario — Xerox Standard Accounting",
                      font=("Segoe UI", 12, "bold"), text_color=TEXT).pack(side="left", padx=14)
 
-        ctk.CTkButton(tb, text="↓  Importar CSV", width=130, height=30,
-                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
-                      font=("Segoe UI", 11, "bold"),
-                      command=self._importar_csv).pack(side="right", padx=6, pady=7)
-        ctk.CTkButton(tb, text="🗑  Limpiar datos", width=120, height=30,
+        ctk.CTkButton(tb, text="🗑  Limpiar", width=90, height=30,
                       fg_color=BG2, hover_color=BORDER, text_color=TEXT2,
                       font=("Segoe UI", 11),
-                      command=self._limpiar).pack(side="right", padx=2, pady=7)
+                      command=self._limpiar).pack(side="right", padx=4, pady=7)
+        ctk.CTkButton(tb, text="↓  Importar CSV", width=130, height=30,
+                      fg_color=BG3, hover_color=BORDER, text_color=TEXT,
+                      font=("Segoe UI", 11),
+                      command=self._importar_csv).pack(side="right", padx=2, pady=7)
+        ctk.CTkButton(tb, text="⟳  Descargar de impresoras", width=190, height=30,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 11, "bold"),
+                      command=self._descargar_auto).pack(side="right", padx=4, pady=7)
 
         self.lbl_info = ctk.CTkLabel(self, text="", font=("Segoe UI", 10), text_color=TEXT2)
         self.lbl_info.pack(anchor="w", padx=14, pady=(6, 2))
@@ -830,6 +864,79 @@ class DialogContabilidad(ctk.CTkToplevel):
         self._sort_col = None
         self._sort_rev = False
         self._poblar()
+
+    def _descargar_auto(self):
+        if not REQUESTS_OK:
+            messagebox.showerror("Falta dependencia",
+                "Instala requests para usar la descarga automática:\n\n  pip install requests")
+            return
+
+        try:
+            impresoras = self.master.impresoras
+        except Exception:
+            impresoras = []
+
+        if not impresoras:
+            messagebox.showinfo("", "No hay impresoras en la lista.")
+            return
+
+        dlg = _DialogCredencialesXSA(self, impresoras)
+        self.wait_window(dlg)
+        if not dlg.resultado:
+            return
+
+        seleccionadas = dlg.resultado   # lista de {ip, nombre, password, usuario}
+        self.lbl_info.configure(text="⏳  Descargando informes...", text_color=WARN)
+        self.update()
+
+        def worker():
+            errores = []
+            ok = 0
+            for imp in seleccionadas:
+                csv_txt, err = _xsa_descargar_csv(
+                    imp["ip"], imp["password"], imp.get("usuario", "admin"))
+                if err:
+                    errores.append(f"{imp['nombre']}: {err}")
+                    continue
+                try:
+                    import io
+                    filas = self._parsear_csv_texto(csv_txt)
+                    if filas:
+                        self._datos[imp["ip"]] = {
+                            "nombre_impresora": f"{imp['nombre']} ({imp['ip']})",
+                            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "usuarios": filas,
+                        }
+                        ok += 1
+                    else:
+                        errores.append(f"{imp['nombre']}: CSV sin datos de usuario")
+                except Exception as e:
+                    errores.append(f"{imp['nombre']}: {e}")
+
+            guardar_json(CONTABILIDAD_FILE, self._datos)
+            def done():
+                self._poblar()
+                if errores:
+                    messagebox.showwarning("Descarga parcial",
+                        f"✔ {ok} impresora(s) descargadas.\n\nErrores:\n" + "\n".join(errores))
+                else:
+                    messagebox.showinfo("Descarga completada",
+                        f"✔ {ok} impresora(s) actualizadas correctamente.")
+            self.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _parsear_csv_texto(self, texto):
+        import io
+        for sep in (";", ",", "\t"):
+            reader = csv.DictReader(io.StringIO(texto), delimiter=sep)
+            try:
+                filas = list(reader)
+                if filas and len(filas[0]) > 2:
+                    return self._procesar_filas(filas)
+            except Exception:
+                pass
+        return []
 
     def _importar_csv(self):
         from tkinter.filedialog import askopenfilename
@@ -876,79 +983,51 @@ class DialogContabilidad(ctk.CTkToplevel):
         self._poblar()
         messagebox.showinfo("Importado", f"✔  {len(filas)} usuarios importados de:\n{os.path.basename(path)}")
 
-    def _parsear_csv(self, path):
-        """
-        Parsea el CSV de XSA. Xerox exporta formatos distintos según firmware.
-        Intenta detectar columnas automáticamente.
-        """
-        import io
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
-            contenido = f.read()
+    _MAP_COLS = {
+        "nombre de usuario": "usuario", "nombre usuario": "usuario",
+        "usuario": "usuario", "id de usuario": "id", "id usuario": "id",
+        "impresiones en b/n": "imp_bw", "impresiones b/n": "imp_bw",
+        "impresiones en color": "imp_color", "impresiones color": "imp_color",
+        "copias en b/n": "cop_bw", "copias b/n": "cop_bw",
+        "copias en color": "cop_color", "copias color": "cop_color",
+        "escaneados": "scan", "escáner": "scan", "escaneos": "scan",
+        "total": "total",
+        "user name": "usuario", "username": "usuario", "user id": "id",
+        "black and white prints": "imp_bw", "b&w prints": "imp_bw",
+        "color prints": "imp_color",
+        "black and white copies": "cop_bw", "b&w copies": "cop_bw",
+        "color copies": "cop_color",
+        "scans": "scan", "scan images": "scan",
+        "fax images": "fax",
+    }
 
-        # Probar delimitadores: ; y ,
-        for sep in (";", ",", "\t"):
-            reader = csv.DictReader(io.StringIO(contenido), delimiter=sep)
-            try:
-                filas = list(reader)
-                if filas and len(filas[0]) > 2:
-                    break
-            except Exception:
-                filas = []
-
-        if not filas:
-            return []
-
-        # Normalizar nombres de columna (Xerox usa distintos idiomas)
-        MAP_COLS = {
-            # ES
-            "nombre de usuario": "usuario", "nombre usuario": "usuario",
-            "usuario": "usuario", "id de usuario": "id", "id usuario": "id",
-            "impresiones en b/n": "imp_bw", "impresiones b/n": "imp_bw",
-            "impresiones en color": "imp_color", "impresiones color": "imp_color",
-            "copias en b/n": "cop_bw", "copias b/n": "cop_bw",
-            "copias en color": "cop_color", "copias color": "cop_color",
-            "escaneados": "scan", "escáner": "scan", "escaneos": "scan",
-            "total": "total",
-            # EN
-            "user name": "usuario", "username": "usuario", "user id": "id",
-            "black and white prints": "imp_bw", "b&w prints": "imp_bw",
-            "color prints": "imp_color",
-            "black and white copies": "cop_bw", "b&w copies": "cop_bw",
-            "color copies": "cop_color",
-            "scans": "scan", "scan images": "scan",
-            "fax images": "fax",
-        }
-
-        def norm(k):
-            return MAP_COLS.get(k.lower().strip(), k.lower().strip())
-
+    def _procesar_filas(self, filas_raw):
+        def norm(k): return self._MAP_COLS.get(k.lower().strip(), k.lower().strip())
         resultado = []
-        for fila in filas:
-            row = {norm(k): v.strip() for k, v in fila.items() if v}
+        for fila in filas_raw:
+            row = {norm(k): (v or "").strip() for k, v in fila.items()}
             if not row.get("usuario"):
                 continue
             def safe_int(k):
-                try: return int(row.get(k, "0").replace(",", "").replace(".", "") or 0)
+                try: return int(row.get(k, "0").replace(",","").replace(".","") or 0)
                 except: return 0
-            imp_bw    = safe_int("imp_bw")
-            imp_color = safe_int("imp_color")
-            cop_bw    = safe_int("cop_bw")
-            cop_color = safe_int("cop_color")
-            scan      = safe_int("scan")
-            total = imp_bw + imp_color + cop_bw + cop_color
+            imp_bw = safe_int("imp_bw"); imp_color = safe_int("imp_color")
+            cop_bw = safe_int("cop_bw"); cop_color = safe_int("cop_color")
+            scan   = safe_int("scan")
             resultado.append({
-                "usuario":   row["usuario"],
-                "id":        row.get("id", ""),
-                "imp_bw":    imp_bw,
-                "imp_color": imp_color,
-                "cop_bw":    cop_bw,
-                "cop_color": cop_color,
-                "scan":      scan,
-                "total":     total,
+                "usuario": row["usuario"], "id": row.get("id",""),
+                "imp_bw": imp_bw, "imp_color": imp_color,
+                "cop_bw": cop_bw, "cop_color": cop_color,
+                "scan": scan, "total": imp_bw+imp_color+cop_bw+cop_color,
             })
-
         resultado.sort(key=lambda r: r["total"], reverse=True)
         return resultado
+
+    def _parsear_csv(self, path):
+        import io
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+            contenido = f.read()
+        return self._parsear_csv_texto(contenido)
 
     def _poblar(self):
         for row in self.tree.get_children():
@@ -1006,6 +1085,72 @@ class DialogContabilidad(ctk.CTkToplevel):
             rows.sort(reverse=self._sort_rev)
         for i, (_, k) in enumerate(rows):
             self.tree.move(k, "", i)
+
+
+class _DialogCredencialesXSA(ctk.CTkToplevel):
+    """Pide usuario/contraseña web y qué impresoras descargar."""
+    def __init__(self, parent, impresoras):
+        super().__init__(parent)
+        self.resultado = None
+        self.title("Descargar informe XSA")
+        self.geometry("440x480")
+        self.minsize(380, 400)
+        self.configure(fg_color=BG2)
+        self.grab_set(); self.lift(); self.focus_force()
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=4)
+
+        pad = {"padx": 20, "pady": 5}
+
+        ctk.CTkLabel(scroll, text="Usuario web de la impresora",
+                     text_color=TEXT2, font=("Segoe UI", 11)).pack(anchor="w", **pad)
+        self.e_user = ctk.CTkEntry(scroll, width=360, fg_color=BG3,
+                                    border_color=BORDER, text_color=TEXT)
+        self.e_user.insert(0, "admin")
+        self.e_user.pack(**pad)
+
+        ctk.CTkLabel(scroll, text="Contraseña",
+                     text_color=TEXT2, font=("Segoe UI", 11)).pack(anchor="w", **pad)
+        self.e_pass = ctk.CTkEntry(scroll, width=360, fg_color=BG3,
+                                    border_color=BORDER, text_color=TEXT, show="•")
+        self.e_pass.pack(**pad)
+
+        ctk.CTkFrame(scroll, fg_color=BORDER, height=1).pack(fill="x", padx=20, pady=8)
+        ctk.CTkLabel(scroll, text="Impresoras a descargar:",
+                     text_color=TEXT2, font=("Segoe UI", 11)).pack(anchor="w", **pad)
+
+        self._checks = {}
+        for imp in impresoras:
+            var = tk.BooleanVar(value=True)
+            self._checks[imp["ip"]] = (var, imp)
+            ctk.CTkCheckBox(scroll, text=f"{imp['nombre']}  ({imp['ip']})",
+                            variable=var, text_color=TEXT,
+                            font=("Segoe UI", 11),
+                            fg_color=ACCENT).pack(anchor="w", padx=24, pady=3)
+
+        btns = ctk.CTkFrame(self, fg_color=BG2, height=52)
+        btns.pack(side="bottom", fill="x", padx=20, pady=10)
+        btns.pack_propagate(False)
+        ctk.CTkButton(btns, text="Cancelar", width=120, height=36,
+                      fg_color=BG3, text_color=TEXT,
+                      command=self.destroy).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="⟳  Descargar", width=140, height=36,
+                      fg_color=ACCENT, hover_color="#3a7de8", text_color=TEXT,
+                      font=("Segoe UI", 12, "bold"),
+                      command=self._ok).pack(side="right", padx=4)
+
+    def _ok(self):
+        pwd = self.e_pass.get().strip()
+        usr = self.e_user.get().strip() or "admin"
+        if not pwd:
+            return
+        self.resultado = [
+            {"ip": ip, "nombre": imp["nombre"], "usuario": usr, "password": pwd}
+            for ip, (var, imp) in self._checks.items()
+            if var.get()
+        ]
+        self.destroy()
 
 
 class _DialogSeleccionarImpresora(ctk.CTkToplevel):
