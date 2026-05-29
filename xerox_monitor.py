@@ -822,10 +822,13 @@ class App(ctk.CTk):
                       text_color=TEXT, font=("Segoe UI", 11, "bold"),
                       command=self._refrescar_todo).pack(side="right", padx=12, pady=8)
 
+        self._build_ui_rest()
+
     def _acerca_de(self):
         messagebox.showinfo("Acerca de Fleet Monitor Pro",
                             "Fleet Monitor Pro\nVersión 1.0\n\nMonitorización de consumibles de impresoras vía SNMP.")
 
+    def _build_ui_rest(self):
         # ── KPI bar ──
         kpi_bar = ctk.CTkFrame(self, fg_color=BG2, height=56, corner_radius=0)
         kpi_bar.pack(fill="x")
