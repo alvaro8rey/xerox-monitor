@@ -159,9 +159,12 @@ section.active{display:block}
 /* KPI row */
 .kpi-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 
+/* TABLE SCROLL WRAPPER — scroll happens here, so th sticky works */
+.tbl-scroll{overflow:auto;max-height:calc(100vh - 140px)}
+
 /* TABLES */
 table{border-collapse:collapse;table-layout:fixed}
-th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:0;text-align:left;position:sticky;top:94px;z-index:98;overflow:hidden;white-space:nowrap;user-select:none}
+th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:0;text-align:left;position:sticky;top:0;z-index:10;overflow:hidden;white-space:nowrap;user-select:none}
 th .th-inner{display:flex;align-items:stretch;height:100%;min-height:32px}
 th .th-txt{flex:1;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 th .col-resizer{flex-shrink:0;width:5px;cursor:col-resize;background:#353860;transition:background .15s;position:relative}
@@ -513,7 +516,7 @@ function renderImpresoras() {
   }).join('');
 
   document.getElementById('imp-table-wrap').innerHTML = `
-    <div style="overflow-x:auto">
+    <div class="tbl-scroll">
     <table id="imp-table" style="width:${totalW}px;min-width:100%">
       <colgroup>${colgroup}</colgroup>
       <thead><tr>${headers}</tr></thead>
