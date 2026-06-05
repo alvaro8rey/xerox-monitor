@@ -160,13 +160,13 @@ section.active{display:block}
 .kpi-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 
 /* TABLES */
-table{width:100%;border-collapse:collapse;table-layout:fixed}
+table{border-collapse:collapse;table-layout:fixed}
 th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:8px 10px;text-align:left;position:sticky;top:52px;overflow:hidden;white-space:nowrap;user-select:none}
-th .th-inner{display:flex;align-items:center;justify-content:space-between;gap:4px}
+th .th-inner{display:flex;align-items:center;justify-content:space-between;gap:4px;height:100%}
 th .th-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-th .col-resizer{flex-shrink:0;width:5px;cursor:col-resize;height:20px;border-radius:2px;background:transparent;transition:background .15s}
+th .col-resizer{flex-shrink:0;width:6px;cursor:col-resize;align-self:stretch;border-radius:2px;background:transparent;transition:background .15s;margin-right:-4px}
 th .col-resizer:hover,th.resizing .col-resizer{background:#4f8ef7}
-td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:middle;overflow:hidden}
+td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:top}
 tr:hover td{background:#1e2238}
 tr.crit td{color:#e74c3c}
 tr.warn td{color:#f39c12}
@@ -184,9 +184,10 @@ tr.off td{color:#6c7a99}
 .cons-pct{width:34px;text-align:right;font-size:11px}
 
 /* ALERTAS */
-.alerts-cell{display:flex;flex-direction:column;gap:2px;max-width:280px}
-.alert-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px;border-radius:4px;max-width:100%;cursor:default}
-.alert-badge .alert-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.alerts-cell{display:flex;flex-direction:column;gap:3px}
+.alert-badge{display:inline-flex;align-items:flex-start;gap:5px;font-size:11px;padding:3px 7px;border-radius:4px;cursor:default;white-space:normal;word-break:break-word}
+.alert-badge .alert-ico{flex-shrink:0}
+.alert-badge .alert-txt{min-width:0}
 .alert-crit{background:#3d0f0f;color:#e74c3c}
 .alert-warn{background:#2e1e00;color:#f39c12}
 .alert-info{background:#0f1e3d;color:#7ab4f5}
@@ -401,6 +402,14 @@ function _onResize(ev) {
   const newW = Math.max(60, startW + ev.clientX - startX);
   col.style.width = newW + 'px';
   _colWidths[colId] = newW;
+  // Expand table width so other columns don't get squeezed
+  const tbl = document.getElementById('imp-table');
+  if (tbl) {
+    const cols = tbl.querySelectorAll('col');
+    let total = 0;
+    cols.forEach(c => { total += parseInt(c.style.width) || 0; });
+    tbl.style.width = Math.max(total, tbl.parentElement.clientWidth) + 'px';
+  }
 }
 function _stopResize() {
   if (_resizeState && _resizeState.th) _resizeState.th.classList.remove('resizing');
@@ -468,7 +477,7 @@ function renderImpresoras() {
       const cls2 = a.nivel==='critical'?'alert-crit':a.nivel==='warning'?'alert-warn':'alert-info';
       const ico  = a.nivel==='critical'?'🔴':a.nivel==='warning'?'🟡':'🔵';
       const txt  = esc(a.texto);
-      return `<span class="alert-badge ${cls2}" title="${txt}">${ico} <span class="alert-txt">${txt}</span></span>`;
+      return `<span class="alert-badge ${cls2}"><span class="alert-ico">${ico}</span><span class="alert-txt">${txt}</span></span>`;
     }).join('');
     const alertsCell = alertBadges
       ? `<div class="alerts-cell">${alertBadges}</div>`
@@ -485,25 +494,26 @@ function renderImpresoras() {
   }).join('');
 
   const COL_DEFS = [
-    {id:'col-nombre',    label:'Nombre',        show:showNombre,    w: _colWidths['col-nombre']    || 200},
-    {id:'col-ip',        label:'IP',            show:showIp,        w: _colWidths['col-ip']        || 130},
-    {id:'col-ubicacion', label:'Ubicación',     show:showUbicacion, w: _colWidths['col-ubicacion'] || 140},
-    {id:'col-consumibles',label:'Consumibles',  show:showCons,      w: _colWidths['col-consumibles']|| 260},
-    {id:'col-alertas',   label:'Alertas',       show:showAlertas,   w: _colWidths['col-alertas']   || 260},
-    {id:'col-ts',        label:'Última lectura',show:showTs,        w: _colWidths['col-ts']        || 130},
+    {id:'col-nombre',     label:'Nombre',         show:showNombre,    w: _colWidths['col-nombre']     || 180},
+    {id:'col-ip',         label:'IP',             show:showIp,        w: _colWidths['col-ip']         || 120},
+    {id:'col-ubicacion',  label:'Ubicación',      show:showUbicacion, w: _colWidths['col-ubicacion']  || 130},
+    {id:'col-consumibles',label:'Consumibles',    show:showCons,      w: _colWidths['col-consumibles']|| 300},
+    {id:'col-alertas',    label:'Alertas',        show:showAlertas,   w: _colWidths['col-alertas']    || 320},
+    {id:'col-ts',         label:'Última lectura', show:showTs,        w: _colWidths['col-ts']         || 130},
   ];
   const visCols = COL_DEFS.filter(c => c.show);
+  const totalW  = visCols.reduce((s,c) => s + c.w, 0);
 
   const colgroup = visCols.map(c => `<col id="cgcol-${c.id}" style="width:${c.w}px">`).join('');
   const headers  = visCols.map((c,i) => {
     const isLast = i === visCols.length - 1;
-    const resizer = isLast ? '' : `<span class="col-resizer" data-col="${c.id}" onmousedown="startResize(event,'${c.id}')"></span>`;
-    return `<th data-col="${c.id}"><div class="th-inner"><span class="th-txt">${c.label}</span>${resizer}</div></th>`;
+    const resizer = isLast ? '' : `<span class="col-resizer" onmousedown="startResize(event,'${c.id}')"></span>`;
+    return `<th><div class="th-inner"><span class="th-txt">${c.label}</span>${resizer}</div></th>`;
   }).join('');
 
   document.getElementById('imp-table-wrap').innerHTML = `
     <div style="overflow-x:auto">
-    <table id="imp-table">
+    <table id="imp-table" style="width:${totalW}px;min-width:100%">
       <colgroup>${colgroup}</colgroup>
       <thead><tr>${headers}</tr></thead>
       <tbody>${rows}</tbody>
