@@ -7,7 +7,9 @@ import json, os, threading
 from datetime import datetime
 from flask import Flask, jsonify, render_template_string
 
-BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
+import sys as _sys
+BASE_DIR = (os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False)
+            else os.path.dirname(os.path.abspath(__file__)))
 DB_FILE           = os.path.join(BASE_DIR, "impresoras.json")
 HISTORIAL_FILE    = os.path.join(BASE_DIR, "historial.json")
 CONTABILIDAD_FILE = os.path.join(BASE_DIR, "contabilidad_xsa.json")

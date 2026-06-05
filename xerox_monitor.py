@@ -87,10 +87,18 @@ def _formato_consumibles(cons, umbral_critico, umbral_alerta):
     return "   ".join(parts) if parts else "✓ Todo OK"
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
-DB_FILE        = "impresoras.json"
-HISTORIAL_FILE = "historial.json"
-ALERTAS_FILE   = "alertas.json"
-CONFIG_FILE    = "config.json"
+# En modo frozen (PyInstaller) los datos se guardan junto al .exe,
+# no en el directorio temporal de extracción.
+def _data_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+_D            = _data_dir()
+DB_FILE        = os.path.join(_D, "impresoras.json")
+HISTORIAL_FILE = os.path.join(_D, "historial.json")
+ALERTAS_FILE   = os.path.join(_D, "alertas.json")
+CONFIG_FILE    = os.path.join(_D, "config.json")
 BASE_OID       = "1.3.6.1.2.1.43.11.1.1"
 DEFAULT_CONFIG = {
     "umbral_critico": 15,
@@ -1481,7 +1489,7 @@ class DialogConfig(ctk.CTkToplevel):
 # ══════════════════════════════════════════════════════════════════════════════
 # DIALOGO CONTABILIDAD POR USUARIO (XSA CSV)
 # ══════════════════════════════════════════════════════════════════════════════
-CONTABILIDAD_FILE   = "contabilidad_xsa.json"
+CONTABILIDAD_FILE   = os.path.join(_data_dir(), "contabilidad_xsa.json")
 XSA_PATH_GENERATE   = "/properties/accounting/XSA_generate_date.php"
 XSA_PATH_DOWNLOAD   = "/properties/accounting/download_csv.php"
 
