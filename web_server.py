@@ -180,11 +180,21 @@ tr.off td{color:#6c7a99}
 .cons-pct{width:34px;text-align:right;font-size:11px}
 
 /* ALERTAS */
-.alerts-cell{display:flex;flex-direction:column;gap:2px}
-.alert-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px;border-radius:4px;white-space:nowrap}
+.alerts-cell{display:flex;flex-direction:column;gap:2px;max-width:280px}
+.alert-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 7px;border-radius:4px;max-width:100%;cursor:default}
+.alert-badge .alert-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .alert-crit{background:#3d0f0f;color:#e74c3c}
 .alert-warn{background:#2e1e00;color:#f39c12}
 .alert-info{background:#0f1e3d;color:#7ab4f5}
+
+/* COLUMN CHOOSER */
+.col-chooser-wrap{position:relative;display:inline-block}
+.col-chooser-btn{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 14px;border-radius:6px;font-size:13px;font-family:inherit;cursor:pointer}
+.col-chooser-btn:hover{background:#353860}
+.col-chooser-dropdown{display:none;position:absolute;right:0;top:calc(100% + 6px);background:#232640;border:1px solid #353860;border-radius:8px;padding:10px 14px;z-index:200;min-width:180px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+.col-chooser-dropdown.open{display:block}
+.col-chooser-dropdown label{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:13px;color:#c8cae0;user-select:none}
+.col-chooser-dropdown input[type=checkbox]{accent-color:#4f8ef7;width:14px;height:14px;cursor:pointer}
 
 /* CONTABILIDAD */
 .cont-controls{display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
@@ -255,6 +265,19 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
 </nav>
 
 <section id="tab-impresoras" class="active">
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+    <div class="col-chooser-wrap">
+      <button class="col-chooser-btn" onclick="toggleChooser()">⚙ Columnas</button>
+      <div class="col-chooser-dropdown" id="col-chooser">
+        <label><input type="checkbox" id="col-nombre"    checked onchange="renderImpresoras()"> Nombre</label>
+        <label><input type="checkbox" id="col-ip"        checked onchange="renderImpresoras()"> IP</label>
+        <label><input type="checkbox" id="col-ubicacion" checked onchange="renderImpresoras()"> Ubicación</label>
+        <label><input type="checkbox" id="col-consumibles" checked onchange="renderImpresoras()"> Consumibles</label>
+        <label><input type="checkbox" id="col-alertas"   checked onchange="renderImpresoras()"> Alertas</label>
+        <label><input type="checkbox" id="col-ts"        checked onchange="renderImpresoras()"> Última lectura</label>
+      </div>
+    </div>
+  </div>
   <div id="imp-table-wrap"><div class="loader"><span class="spinner"></span>Cargando datos...</div></div>
 </section>
 
@@ -352,6 +375,21 @@ async function loadImpresoras() {
   }
 }
 
+function colVis(id) {
+  const el = document.getElementById(id);
+  return el ? el.checked : true;
+}
+
+function toggleChooser() {
+  document.getElementById('col-chooser').classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  const wrap = document.querySelector('.col-chooser-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    document.getElementById('col-chooser').classList.remove('open');
+  }
+});
+
 function renderImpresoras() {
   const data = _impData;
   let ok=0, warn=0, crit=0, off=0;
@@ -370,6 +408,13 @@ function renderImpresoras() {
   document.getElementById('last-update').textContent =
     'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
 
+  const showNombre    = colVis('col-nombre');
+  const showIp        = colVis('col-ip');
+  const showUbicacion = colVis('col-ubicacion');
+  const showCons      = colVis('col-consumibles');
+  const showAlertas   = colVis('col-alertas');
+  const showTs        = colVis('col-ts');
+
   let rows = data.map(d => {
     const cls    = d.estado==='critico'?'crit':d.estado==='alerta'?'warn':d.estado==='sin datos'?'off':'';
     const dotCls = d.estado==='critico'?'dot-crit':d.estado==='alerta'?'dot-warn':d.estado==='sin datos'?'dot-off':'dot-ok';
@@ -377,9 +422,9 @@ function renderImpresoras() {
 
     const consBars = d.consumibles.length ? `
       <div class="cons-bars">
-        ${d.consumibles.slice(0,6).map(c => `
+        ${d.consumibles.map(c => `
           <div class="cons-item">
-            <span class="cons-lbl">${esc(c.nombre)}</span>
+            <span class="cons-lbl" title="${esc(c.nombre)}">${esc(c.nombre)}</span>
             <div class="bar-bg"><div class="bar-fill bar-${c.estado}" style="width:${Math.max(0,c.pct)}%"></div></div>
             <span class="cons-pct ${c.estado==='critico'?'col-crit':c.estado==='alerta'?'col-warn':''}">${c.pct>=0?c.pct+'%':'?'}</span>
           </div>`).join('')}
@@ -388,28 +433,34 @@ function renderImpresoras() {
     const alertBadges = (d.alerts||[]).map(a => {
       const cls2 = a.nivel==='critical'?'alert-crit':a.nivel==='warning'?'alert-warn':'alert-info';
       const ico  = a.nivel==='critical'?'🔴':a.nivel==='warning'?'🟡':'🔵';
-      return `<span class="alert-badge ${cls2}">${ico} ${esc(a.texto)}</span>`;
+      const txt  = esc(a.texto);
+      return `<span class="alert-badge ${cls2}" title="${txt}">${ico} <span class="alert-txt">${txt}</span></span>`;
     }).join('');
     const alertsCell = alertBadges
       ? `<div class="alerts-cell">${alertBadges}</div>`
       : '<span style="color:#6c7a99;font-size:12px">—</span>';
 
-    return `<tr class="${cls}">
-      <td><span class="dot ${dotCls}"></span>${esc(d.nombre)}</td>
-      <td style="color:#8b92b8">${esc(d.ip)}</td>
-      <td style="color:#8b92b8">${esc(d.ubicacion||'')}</td>
-      <td>${consBars}</td>
-      <td>${alertsCell}</td>
-      <td style="color:#6c7a99;font-size:12px">${ts}</td>
-    </tr>`;
+    let cells = '';
+    if (showNombre)    cells += `<td><span class="dot ${dotCls}"></span>${esc(d.nombre)}</td>`;
+    if (showIp)        cells += `<td style="color:#8b92b8">${esc(d.ip)}</td>`;
+    if (showUbicacion) cells += `<td style="color:#8b92b8">${esc(d.ubicacion||'')}</td>`;
+    if (showCons)      cells += `<td>${consBars}</td>`;
+    if (showAlertas)   cells += `<td>${alertsCell}</td>`;
+    if (showTs)        cells += `<td style="color:#6c7a99;font-size:12px">${ts}</td>`;
+    return `<tr class="${cls}">${cells}</tr>`;
   }).join('');
+
+  let headers = '';
+  if (showNombre)    headers += '<th>Nombre</th>';
+  if (showIp)        headers += '<th>IP</th>';
+  if (showUbicacion) headers += '<th>Ubicación</th>';
+  if (showCons)      headers += '<th>Consumibles</th>';
+  if (showAlertas)   headers += '<th>Alertas</th>';
+  if (showTs)        headers += '<th>Última lectura</th>';
 
   document.getElementById('imp-table-wrap').innerHTML = `
     <table>
-      <thead><tr>
-        <th>Nombre</th><th>IP</th><th>Ubicación</th>
-        <th>Consumibles</th><th>Alertas</th><th>Última lectura</th>
-      </tr></thead>
+      <thead><tr>${headers}</tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
