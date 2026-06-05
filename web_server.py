@@ -320,6 +320,7 @@ PIN_ENTRIES.forEach(e => PIN_MAP[e.pin] = e.nombre);
 // ── PIN ───────────────────────────────────────────────────────────────────────
 function _pinUnlock(pin) {
   _pinUnlocked = true;
+  sessionStorage.setItem('fmp_pin', pin);
   document.getElementById('pin-overlay').classList.remove('show');
   document.body.classList.remove('locked');
   const nombre = PIN_MAP[pin] || '';
@@ -329,6 +330,14 @@ function _pinUnlock(pin) {
   loadImpresoras();
   loadContabilidad();
 }
+
+// Auto-unlock si hay sesión guardada con PIN aún válido
+(function() {
+  var saved = sessionStorage.getItem('fmp_pin');
+  if (saved && PIN_MAP.hasOwnProperty(saved)) {
+    _pinUnlock(saved);
+  }
+})();
 
 function _tryPin() {
   var val = document.getElementById('pin-input').value;
