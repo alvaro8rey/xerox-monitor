@@ -626,7 +626,8 @@ function renderContabilidad() {
   }
 
   const hasColor = [...deptos,...users].some(r=>r.ic>0||r.cc>0);
-  const colColor = hasColor ? `<th>Imp. Color</th><th>Cop. Color</th>` : '';
+  const thNum = `style="min-width:110px;width:110px"`;
+  const colColor = hasColor ? `<th ${thNum}>Imp. Color</th><th ${thNum}>Cop. Color</th>` : '';
 
   function highlight(text) {
     if (!_q) return esc(text);
@@ -669,7 +670,7 @@ function renderContabilidad() {
       ${prevKey?'&nbsp;·&nbsp; mes anterior: '+mesLabel(prevKey):''}
     </p>
     <table>
-      <thead><tr><th>Usuario</th><th>Imp. B/N</th>${colColor}<th>Cop. B/N</th><th>Total</th></tr></thead>
+      <thead><tr><th>Usuario</th><th ${thNum}>Imp. B/N</th>${colColor}<th ${thNum}>Cop. B/N</th><th ${thNum}>Total</th></tr></thead>
       <tbody>
         ${deptos.length ? secHeader('deptos','DEPARTAMENTOS ('+deptos.length+')') + secRows('deptos',deptos) : ''}
         ${users.length  ? secHeader('users', 'USUARIOS ('    +users.length +')')  + secRows('users', users)  : ''}
