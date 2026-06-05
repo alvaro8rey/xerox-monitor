@@ -473,7 +473,7 @@ function renderImpresoras() {
           <div class="cons-item">
             <span class="cons-lbl" title="${esc(c.nombre)}">${esc(c.nombre)}</span>
             <div class="bar-bg"><div class="bar-fill bar-${c.estado}" style="width:${Math.max(0,c.pct)}%"></div></div>
-            <span class="cons-pct ${c.estado==='critico'?'col-crit':c.estado==='alerta'?'col-warn':''}">${c.pct>=0?c.pct+'%':'?'}</span>
+            <span class="cons-pct" style="color:${c.estado==='critico'?'#e74c3c':c.estado==='alerta'?'#f39c12':'#2ecc71'}">${c.pct>=0?c.pct+'%':'?'}</span>
           </div>`).join('')}
       </div>` : '<span style="color:#6c7a99">Sin datos</span>';
 
