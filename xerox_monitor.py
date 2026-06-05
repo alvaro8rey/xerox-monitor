@@ -2553,7 +2553,22 @@ class App(ctk.CTk):
 
     # ── WEB SERVER ────────────────────────────────────────────────────────────
     def _arrancar_web_server(self):
-        """Arranca web_server.py como subproceso oculto sin ventana de consola."""
+        """Arranca el servidor web. En modo frozen usa un hilo; en desarrollo usa subproceso."""
+        if getattr(sys, 'frozen', False):
+            # Ejecutable PyInstaller: Flask corre en hilo daemon del mismo proceso
+            try:
+                import web_server as _ws
+                t = threading.Thread(
+                    target=lambda: _ws.app.run(host="0.0.0.0", port=5050,
+                                               debug=False, use_reloader=False),
+                    daemon=True,
+                )
+                t.start()
+            except Exception:
+                pass
+            return None  # sin subproceso que matar
+
+        # Modo desarrollo: subproceso oculto
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_server.py")
         if not os.path.exists(script):
             return None
