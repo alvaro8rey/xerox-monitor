@@ -299,8 +299,8 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
     <select id="sel-mes" onchange="renderContabilidad()"></select>
     <label>Vista:</label>
     <select id="sel-vista" onchange="renderContabilidad()">
-      <option value="Acumulado">Acumulado</option>
-      <option value="Mensual">Mensual</option>
+      <option value="Acumulado">Acumulado (total)</option>
+      <option value="Diferencial">Diferencial (vs anterior)</option>
     </select>
     <input id="cont-search" type="search" placeholder="🔍 Buscar usuario..." oninput="renderContabilidad()"
       style="background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10px;border-radius:6px;font-size:13px;font-family:inherit;width:200px;outline:none">
@@ -567,6 +567,19 @@ function updateMesOptions() {
 function mesLabel(key) {
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                  'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  // Anual: "2026"
+  if (/^\d{4}$/.test(key)) return key;
+  // Semanal: "2026-W23"
+  if (/^\d{4}-W\d+$/.test(key)) {
+    const [y, w] = key.split('-W');
+    return `Semana ${w} de ${y}`;
+  }
+  // Diario: "2026-06-05"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(key)) {
+    const [y, m, d] = key.split('-');
+    return `${d} ${meses[parseInt(m)-1]} ${y}`;
+  }
+  // Mensual: "2026-06"
   const [y, m] = key.split('-');
   return `${meses[parseInt(m)-1]} ${y}`;
 }
@@ -667,7 +680,7 @@ function renderContabilidad() {
     <p style="color:#8b92b8;font-size:12px;margin-bottom:8px">
       ${esc(imp.nombre)} — ${titulo} — ${vista}
       &nbsp;·&nbsp; snapshot: ${curSnap.ts||'?'}
-      ${prevKey?'&nbsp;·&nbsp; mes anterior: '+mesLabel(prevKey):''}
+      ${prevKey?'&nbsp;·&nbsp; anterior: '+mesLabel(prevKey):''}
     </p>
     <table>
       <thead><tr><th>Usuario</th><th ${thNum}>Imp. B/N</th>${colColor}<th ${thNum}>Cop. B/N</th><th ${thNum}>Total</th></tr></thead>
@@ -691,10 +704,9 @@ function exportarCSV() {
   const EXCL   = new Set(imp.excluir.map(d=>d.toLowerCase()));
 
   let curKey, prevKey = null;
-  if (mesV === 'Acumulado' || vista === 'Acumulado') {
-    curKey = sorted[sorted.length-1];
-  } else {
-    curKey = sorted.includes(mesV) ? mesV : sorted[sorted.length-1];
+  curKey = (mesV === 'Acumulado') ? sorted[sorted.length-1]
+         : (sorted.includes(mesV) ? mesV : sorted[sorted.length-1]);
+  if (vista === 'Diferencial') {
     const idx2 = sorted.indexOf(curKey);
     if (idx2 > 0) prevKey = sorted[idx2-1];
   }

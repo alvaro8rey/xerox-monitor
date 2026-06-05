@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 import customtkinter as ctk
 import json, os, asyncio, socket, threading, csv, ipaddress, subprocess, sys
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 PIL_OK = False
@@ -101,8 +101,15 @@ DEFAULT_CONFIG = {
     "xsa_usuario":    "admin",
     "xsa_password":   "",
     "xsa_autodownload": True,
-    "xsa_ultimo_mes": "",   # "YYYY-MM" del último autodownload
+    "xsa_ultimo_mes": "",   # última clave de snapshot descargada
     "web_pins": [{"pin": "2026", "nombre": ""}],
+    "contabilidad_schedule": {
+        "tipo":       "mensual",  # diario | semanal | mensual | anual
+        "dia_mes":    1,          # 1-28 (mensual/anual)
+        "dia_semana": 0,          # 0=Lun … 6=Dom (semanal)
+        "mes":        1,          # 1-12 (anual)
+        "hora":       "06:00",    # HH:MM
+    },
 }
 
 # ── PALETA ────────────────────────────────────────────────────────────────────
@@ -1068,6 +1075,98 @@ class DialogDetalles(ctk.CTkToplevel):
                 tag = "alt" if alt else ""
                 self._tree.insert("", "end", values=(f"  {etiqueta}", valor), tags=(tag,))
                 alt = not alt
+
+
+class DialogContabilidadSchedule(ctk.CTkToplevel):
+    """Configuración del horario de descarga automática de contabilidad."""
+
+    TIPOS = ["diario", "semanal", "mensual", "anual"]
+    DIAS_SEMANA = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+    MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+             "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+
+    def __init__(self, master, cfg: dict, on_save):
+        super().__init__(master)
+        self.title("Programación de descarga de contabilidad")
+        self.resizable(False, False)
+        self.grab_set()
+        self._cfg    = cfg
+        self._on_save = on_save
+        sched = {**{"tipo":"mensual","dia_mes":1,"dia_semana":0,"mes":1,"hora":"06:00"},
+                 **cfg.get("contabilidad_schedule", {})}
+
+        pad = {"padx": 14, "pady": 6}
+
+        # Frecuencia
+        ctk.CTkLabel(self, text="Frecuencia:", anchor="w").grid(row=0, column=0, sticky="w", **pad)
+        self._var_tipo = ctk.StringVar(value=sched["tipo"])
+        self._cmb_tipo = ctk.CTkComboBox(self, values=self.TIPOS, variable=self._var_tipo,
+                                          width=150, command=lambda _: self._actualizar_ui())
+        self._cmb_tipo.grid(row=0, column=1, sticky="w", **pad)
+
+        # Día de la semana (solo semanal)
+        self._lbl_dow = ctk.CTkLabel(self, text="Día de la semana:", anchor="w")
+        self._cmb_dow = ctk.CTkComboBox(self, values=self.DIAS_SEMANA, width=150)
+        self._cmb_dow.set(self.DIAS_SEMANA[max(0, min(6, sched["dia_semana"]))])
+
+        # Mes (solo anual)
+        self._lbl_mes = ctk.CTkLabel(self, text="Mes:", anchor="w")
+        self._cmb_mes = ctk.CTkComboBox(self, values=self.MESES, width=150)
+        self._cmb_mes.set(self.MESES[max(0, min(11, sched["mes"]-1))])
+
+        # Día del mes (mensual / anual)
+        self._lbl_dia = ctk.CTkLabel(self, text="Día del mes:", anchor="w")
+        dias = [str(d) for d in range(1, 29)]
+        self._cmb_dia = ctk.CTkComboBox(self, values=dias, width=80)
+        self._cmb_dia.set(str(max(1, min(28, sched["dia_mes"]))))
+
+        # Hora
+        ctk.CTkLabel(self, text="Hora (HH:MM):", anchor="w").grid(row=5, column=0, sticky="w", **pad)
+        self._ent_hora = ctk.CTkEntry(self, width=80, placeholder_text="06:00")
+        self._ent_hora.insert(0, sched["hora"])
+        self._ent_hora.grid(row=5, column=1, sticky="w", **pad)
+
+        # Botones
+        frm = ctk.CTkFrame(self, fg_color="transparent")
+        frm.grid(row=6, column=0, columnspan=2, pady=(10, 14), padx=14, sticky="e")
+        ctk.CTkButton(frm, text="Cancelar", width=90, fg_color=BG2,
+                      command=self.destroy).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(frm, text="Guardar", width=90,
+                      command=self._guardar).pack(side="left")
+
+        self._actualizar_ui()
+
+    def _actualizar_ui(self):
+        tipo = self._var_tipo.get()
+        # Ocultar todo primero
+        for w in (self._lbl_dow, self._cmb_dow, self._lbl_mes, self._cmb_mes,
+                  self._lbl_dia, self._cmb_dia):
+            w.grid_forget()
+        pad = {"padx": 14, "pady": 6}
+        if tipo == "semanal":
+            self._lbl_dow.grid(row=1, column=0, sticky="w", **pad)
+            self._cmb_dow.grid(row=1, column=1, sticky="w", **pad)
+        if tipo in ("mensual", "anual"):
+            if tipo == "anual":
+                self._lbl_mes.grid(row=2, column=0, sticky="w", **pad)
+                self._cmb_mes.grid(row=2, column=1, sticky="w", **pad)
+            self._lbl_dia.grid(row=3, column=0, sticky="w", **pad)
+            self._cmb_dia.grid(row=3, column=1, sticky="w", **pad)
+
+    def _guardar(self):
+        tipo  = self._var_tipo.get()
+        hora  = self._ent_hora.get().strip() or "06:00"
+        dow   = self.DIAS_SEMANA.index(self._cmb_dow.get()) if self._cmb_dow.get() in self.DIAS_SEMANA else 0
+        mes   = self.MESES.index(self._cmb_mes.get()) + 1 if self._cmb_mes.get() in self.MESES else 1
+        try:
+            dia = int(self._cmb_dia.get())
+        except ValueError:
+            dia = 1
+        self._cfg["contabilidad_schedule"] = {
+            "tipo": tipo, "dia_mes": dia, "dia_semana": dow, "mes": mes, "hora": hora,
+        }
+        self._on_save(self._cfg)
+        self.destroy()
 
 
 class DialogWebPins(ctk.CTkToplevel):
@@ -2476,6 +2575,7 @@ class App(ctk.CTk):
         m_tools.add_command(label="Contabilidad por usuario...", command=self._abrir_contabilidad)
         m_tools.add_separator()
         m_tools.add_command(label="Acceso web (PINs)...", command=self._abrir_web_pins)
+        m_tools.add_command(label="Programación de descarga...", command=self._abrir_schedule)
         m_tools.add_command(label="Configuración", command=self._abrir_config)
         menubar.add_cascade(label="Herramientas", menu=m_tools)
 
@@ -3033,22 +3133,65 @@ class App(ctk.CTk):
         self._schedule_autoref()
 
     # ── XSA AUTO DOWNLOAD ─────────────────────────────────────────────────────
+    @staticmethod
+    def _xsa_snapshot_key(now, sched):
+        """Devuelve la clave del snapshot para el instante 'now' según la config."""
+        tipo = sched.get("tipo", "mensual")
+        if tipo == "diario":
+            return now.strftime("%Y-%m-%d")
+        if tipo == "semanal":
+            # ISO week: 2026-W23
+            return now.strftime("%Y-W%W")
+        if tipo == "anual":
+            return now.strftime("%Y")
+        return now.strftime("%Y-%m")  # mensual (default)
+
     def _schedule_xsa_autodownload(self):
-        """Programa el próximo tick para cuando sea el día 1 a las 00:00."""
+        """Calcula cuándo es el próximo disparo según la config y lo programa."""
         if not self.cfg.get("xsa_autodownload") or not self.cfg.get("xsa_password"):
             return
-        now = datetime.now()
-        # Próximo día 1 a las 00:00
-        if now.month == 12:
-            prox = datetime(now.year + 1, 1, 1)
-        else:
-            prox = datetime(now.year, now.month + 1, 1)
-        ms = int((prox - now).total_seconds() * 1000)
+        sched = {**{"tipo":"mensual","dia_mes":1,"dia_semana":0,"mes":1,"hora":"06:00"},
+                 **self.cfg.get("contabilidad_schedule", {})}
+        now   = datetime.now()
+        tipo  = sched["tipo"]
+        try:
+            hh, mm = [int(x) for x in sched["hora"].split(":")]
+        except Exception:
+            hh, mm = 6, 0
+
+        if tipo == "diario":
+            prox = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if prox <= now:
+                prox += timedelta(days=1)
+        elif tipo == "semanal":
+            dow   = sched["dia_semana"]  # 0=Mon
+            days  = (dow - now.weekday()) % 7
+            prox  = (now + timedelta(days=days)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if prox <= now:
+                prox += timedelta(weeks=1)
+        elif tipo == "anual":
+            mes = max(1, min(12, sched["mes"]))
+            dia = max(1, min(28, sched["dia_mes"]))
+            prox = now.replace(month=mes, day=dia, hour=hh, minute=mm, second=0, microsecond=0)
+            if prox <= now:
+                prox = prox.replace(year=prox.year + 1)
+        else:  # mensual
+            dia  = max(1, min(28, sched["dia_mes"]))
+            prox = now.replace(day=dia, hour=hh, minute=mm, second=0, microsecond=0)
+            if prox <= now:
+                if now.month == 12:
+                    prox = prox.replace(year=now.year + 1, month=1)
+                else:
+                    prox = prox.replace(month=now.month + 1)
+
+        ms = max(60_000, int((prox - now).total_seconds() * 1000))
         self.after(ms, self._tick_xsa_autodownload)
 
     def _tick_xsa_autodownload(self):
-        mes_actual = datetime.now().strftime("%Y-%m")
-        if self.cfg.get("xsa_ultimo_mes") == mes_actual:
+        sched     = {**{"tipo":"mensual","dia_mes":1,"dia_semana":0,"mes":1,"hora":"06:00"},
+                     **self.cfg.get("contabilidad_schedule", {})}
+        clave_hoy = self._xsa_snapshot_key(datetime.now(), sched)
+        if self.cfg.get("xsa_ultimo_mes") == clave_hoy:
             self._schedule_xsa_autodownload()
             return
         if not REQUESTS_OK:
@@ -3081,7 +3224,7 @@ class App(ctk.CTk):
                     if filas:
                         if ip not in datos:
                             datos[ip] = {"nombre_impresora": f"{imp['nombre']} ({ip})", "snapshots": {}}
-                        datos[ip]["snapshots"][mes_actual] = {
+                        datos[ip]["snapshots"][clave_hoy] = {
                             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "usuarios": filas,
                         }
@@ -3092,7 +3235,7 @@ class App(ctk.CTk):
                     errores.append(f"{imp['nombre']}: {e}")
 
             guardar_json(CONTABILIDAD_FILE, datos)
-            self.cfg["xsa_ultimo_mes"] = mes_actual
+            self.cfg["xsa_ultimo_mes"] = clave_hoy
             guardar_json(CONFIG_FILE, self.cfg)
 
             def done():
@@ -3195,6 +3338,13 @@ class App(ctk.CTk):
     # ── CONFIG ────────────────────────────────────────────────────────────────
     def _abrir_web_pins(self):
         DialogWebPins(self, self.cfg)
+
+    def _abrir_schedule(self):
+        def on_save(cfg):
+            self.cfg = cfg
+            guardar_json(CONFIG_FILE, self.cfg)
+            self._schedule_xsa_autodownload()
+        DialogContabilidadSchedule(self, self.cfg, on_save)
 
     def _abrir_config(self):
         def on_save():
