@@ -1351,7 +1351,7 @@ class DialogConfig(ctk.CTkToplevel):
         self.autoref.pack(**pad)
 
         ctk.CTkFrame(scroll, fg_color=BORDER, height=1).pack(fill="x", padx=20, pady=(14,4))
-        ctk.CTkLabel(scroll, text="Descarga automática XSA (día 1 de cada mes)",
+        ctk.CTkLabel(scroll, text="Descarga automática XSA",
                      text_color=TEXT2, font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20, pady=(4,0))
 
         lbl("Usuario web impresora")
@@ -1366,13 +1366,92 @@ class DialogConfig(ctk.CTkToplevel):
         self.xsa_pass.pack(**pad)
 
         self.xsa_auto_var = tk.BooleanVar(value=cfg.get("xsa_autodownload", True))
-        ctk.CTkCheckBox(scroll, text="Activar descarga automática el día 1",
+        ctk.CTkCheckBox(scroll, text="Activar descarga automática",
                         variable=self.xsa_auto_var, text_color=TEXT,
-                        font=("Segoe UI", 11), fg_color=ACCENT).pack(anchor="w", padx=24, pady=6)
+                        font=("Segoe UI", 11), fg_color=ACCENT,
+                        command=self._toggle_schedule_ui).pack(anchor="w", padx=24, pady=6)
+
+        # ── Programación ──────────────────────────────────────────────────────
+        sched = {**{"tipo":"mensual","dia_mes":1,"dia_semana":0,"mes":1,"hora":"06:00"},
+                 **cfg.get("contabilidad_schedule", {})}
+
+        self._sched_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._sched_frame.pack(fill="x", padx=24, pady=(0, 6))
+        sf = self._sched_frame
+
+        TIPOS       = ["diario", "semanal", "mensual", "anual"]
+        DIAS_SEMANA = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+        MESES_L     = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                       "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+        DIAS        = [str(d) for d in range(1, 29)]
+
+        def row(r, label, widget):
+            ctk.CTkLabel(sf, text=label, text_color=TEXT, font=("Segoe UI", 11),
+                         width=160, anchor="w").grid(row=r, column=0, sticky="w", pady=3)
+            widget.grid(row=r, column=1, sticky="w", pady=3, padx=(8, 0))
+
+        self.xsa_tipo_var = tk.StringVar(value=sched["tipo"])
+        cmb_tipo = ctk.CTkComboBox(sf, values=TIPOS, variable=self.xsa_tipo_var, width=140,
+                                    command=lambda _: self._update_sched_rows())
+        row(0, "Frecuencia:", cmb_tipo)
+
+        self.xsa_dow_var = tk.StringVar(value=DIAS_SEMANA[max(0, min(6, sched["dia_semana"]))])
+        self._cmb_dow = ctk.CTkComboBox(sf, values=DIAS_SEMANA, variable=self.xsa_dow_var, width=140)
+        self._lbl_dow = ctk.CTkLabel(sf, text="Día de la semana:", text_color=TEXT,
+                                      font=("Segoe UI", 11), width=160, anchor="w")
+
+        self.xsa_mes_var = tk.StringVar(value=MESES_L[max(0, min(11, sched["mes"]-1))])
+        self._cmb_mes2 = ctk.CTkComboBox(sf, values=MESES_L, variable=self.xsa_mes_var, width=140)
+        self._lbl_mes2 = ctk.CTkLabel(sf, text="Mes:", text_color=TEXT,
+                                       font=("Segoe UI", 11), width=160, anchor="w")
+
+        self.xsa_dia_var = tk.StringVar(value=str(max(1, min(28, sched["dia_mes"]))))
+        self._cmb_dia2 = ctk.CTkComboBox(sf, values=DIAS, variable=self.xsa_dia_var, width=80)
+        self._lbl_dia2 = ctk.CTkLabel(sf, text="Día del mes:", text_color=TEXT,
+                                       font=("Segoe UI", 11), width=160, anchor="w")
+
+        self.xsa_hora_var = tk.StringVar(value=sched["hora"])
+        ent_hora = ctk.CTkEntry(sf, textvariable=self.xsa_hora_var, width=80,
+                                fg_color=BG3, border_color=BORDER, text_color=TEXT)
+        row(4, "Hora (HH:MM):", ent_hora)
+
+        self._DIAS_SEMANA = DIAS_SEMANA
+        self._MESES_L     = MESES_L
+        self._update_sched_rows()
+        self._toggle_schedule_ui()
+
+    def _toggle_schedule_ui(self):
+        state = "normal" if self.xsa_auto_var.get() else "disabled"
+        for w in self._sched_frame.winfo_children():
+            try:
+                w.configure(state=state)
+            except Exception:
+                pass
+
+    def _update_sched_rows(self):
+        tipo = self.xsa_tipo_var.get()
+        for w in (self._lbl_dow, self._cmb_dow, self._lbl_mes2, self._cmb_mes2,
+                  self._lbl_dia2, self._cmb_dia2):
+            w.grid_forget()
+        if tipo == "semanal":
+            self._lbl_dow.grid(row=1, column=0, sticky="w", pady=3)
+            self._cmb_dow.grid(row=1, column=1, sticky="w", pady=3, padx=(8,0))
+        if tipo in ("mensual", "anual"):
+            if tipo == "anual":
+                self._lbl_mes2.grid(row=2, column=0, sticky="w", pady=3)
+                self._cmb_mes2.grid(row=2, column=1, sticky="w", pady=3, padx=(8,0))
+            self._lbl_dia2.grid(row=3, column=0, sticky="w", pady=3)
+            self._cmb_dia2.grid(row=3, column=1, sticky="w", pady=3, padx=(8,0))
 
     def _guardar(self):
         try:
             mapa_inv = {"Desactivado":0,"30s":30,"60s":60,"2 min":120,"5 min":300}
+            dow = self._DIAS_SEMANA.index(self.xsa_dow_var.get()) if self.xsa_dow_var.get() in self._DIAS_SEMANA else 0
+            mes = self._MESES_L.index(self.xsa_mes_var.get()) + 1 if self.xsa_mes_var.get() in self._MESES_L else 1
+            try:
+                dia = int(self.xsa_dia_var.get())
+            except ValueError:
+                dia = 1
             self.cfg.update({
                 "umbral_critico":    int(self.crit_var.get()),
                 "umbral_alerta":     int(self.alert_var.get()),
@@ -1382,6 +1461,13 @@ class DialogConfig(ctk.CTkToplevel):
                 "xsa_usuario":       self.xsa_user.get().strip() or "admin",
                 "xsa_password":      self.xsa_pass.get(),
                 "xsa_autodownload":  self.xsa_auto_var.get(),
+                "contabilidad_schedule": {
+                    "tipo":       self.xsa_tipo_var.get(),
+                    "dia_mes":    dia,
+                    "dia_semana": dow,
+                    "mes":        mes,
+                    "hora":       self.xsa_hora_var.get().strip() or "06:00",
+                },
             })
             guardar_json(CONFIG_FILE, self.cfg)
             self.on_save()
@@ -2575,7 +2661,6 @@ class App(ctk.CTk):
         m_tools.add_command(label="Contabilidad por usuario...", command=self._abrir_contabilidad)
         m_tools.add_separator()
         m_tools.add_command(label="Acceso web (PINs)...", command=self._abrir_web_pins)
-        m_tools.add_command(label="Programación de descarga...", command=self._abrir_schedule)
         m_tools.add_command(label="Configuración", command=self._abrir_config)
         menubar.add_cascade(label="Herramientas", menu=m_tools)
 
@@ -3162,7 +3247,11 @@ class App(ctk.CTk):
         if tipo == "diario":
             prox = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
             if prox <= now:
-                prox += timedelta(days=1)
+                # Si no hay clave guardada (config recién guardada), disparar en 2s
+                if not self.cfg.get("xsa_ultimo_mes"):
+                    prox = now + timedelta(seconds=2)
+                else:
+                    prox += timedelta(days=1)
         elif tipo == "semanal":
             dow   = sched["dia_semana"]  # 0=Mon
             days  = (dow - now.weekday()) % 7
@@ -3184,7 +3273,7 @@ class App(ctk.CTk):
                 else:
                     prox = prox.replace(month=now.month + 1)
 
-        ms = max(60_000, int((prox - now).total_seconds() * 1000))
+        ms = max(1_000, int((prox - now).total_seconds() * 1000))
         self.after(ms, self._tick_xsa_autodownload)
 
     def _tick_xsa_autodownload(self):
@@ -3339,16 +3428,14 @@ class App(ctk.CTk):
     def _abrir_web_pins(self):
         DialogWebPins(self, self.cfg)
 
-    def _abrir_schedule(self):
-        def on_save(cfg):
-            self.cfg = cfg
-            guardar_json(CONFIG_FILE, self.cfg)
-            self._schedule_xsa_autodownload()
-        DialogContabilidadSchedule(self, self.cfg, on_save)
-
     def _abrir_config(self):
         def on_save():
             self._schedule_autoref()
+            # Resetear la última clave descargada para que si el usuario
+            # cambió la programación y la hora ya pasó hoy, no se salte
+            self.cfg.pop("xsa_ultimo_mes", None)
+            guardar_json(CONFIG_FILE, self.cfg)
+            self._schedule_xsa_autodownload()
             self._poblar_tabla()
         DialogConfig(self, self.cfg, on_save)
 
