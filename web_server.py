@@ -302,6 +302,8 @@ select{background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10p
       <option value="Acumulado">Acumulado</option>
       <option value="Mensual">Mensual</option>
     </select>
+    <input id="cont-search" type="search" placeholder="🔍 Buscar usuario..." oninput="renderContabilidad()"
+      style="background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 10px;border-radius:6px;font-size:13px;font-family:inherit;width:200px;outline:none">
     <button onclick="exportarCSV()" style="margin-left:auto;background:#2c3057;border:1px solid #353860;color:#e8eaf0;padding:5px 14px;border-radius:6px;font-size:13px;font-family:inherit;cursor:pointer">⬇ Exportar CSV</button>
   </div>
   <div id="cont-table-wrap"><div class="loader"><span class="spinner"></span>Cargando...</div></div>
@@ -616,12 +618,26 @@ function renderContabilidad() {
   deptos.sort((a,b)=>b.total-a.total);
   users.sort((a,b)=>b.total-a.total);
 
+  const _q = (document.getElementById('cont-search')?.value||'').trim().toLowerCase();
+  if (_q) {
+    const match = r => r.label.toLowerCase().includes(_q);
+    deptos = deptos.filter(match);
+    users  = users.filter(match);
+  }
+
   const hasColor = [...deptos,...users].some(r=>r.ic>0||r.cc>0);
   const colColor = hasColor ? `<th>Imp. Color</th><th>Cop. Color</th>` : '';
 
+  function highlight(text) {
+    if (!_q) return esc(text);
+    const i = text.toLowerCase().indexOf(_q);
+    if (i < 0) return esc(text);
+    return esc(text.slice(0,i)) + '<mark style="background:#4f8ef7;color:#fff;border-radius:2px;padding:0 2px">' + esc(text.slice(i,i+_q.length)) + '</mark>' + esc(text.slice(i+_q.length));
+  }
+
   function fRow(r) {
     const color = hasColor ? `<td>${r.ic||'—'}</td><td>${r.cc||'—'}</td>` : '';
-    return `<tr><td>${esc(r.label)}</td><td>${r.ib||'—'}</td>${color}<td>${r.cb||'—'}</td><td>${r.total||'—'}</td></tr>`;
+    return `<tr><td>${highlight(r.label)}</td><td>${r.ib||'—'}</td>${color}<td>${r.cb||'—'}</td><td>${r.total||'—'}</td></tr>`;
   }
 
   if (!renderContabilidad._collapsed) renderContabilidad._collapsed = {};
