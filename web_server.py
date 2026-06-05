@@ -147,7 +147,7 @@ header .ts{color:#8b92b8;font-size:12px;margin-left:auto}
 .col-ok{color:#2ecc71} .col-warn{color:#f39c12} .col-crit{color:#e74c3c} .col-off{color:#6c7a99}
 
 /* TABS */
-nav{background:#232640;display:flex;gap:2px;padding:0 16px;border-bottom:1px solid #353860}
+nav{background:#232640;display:flex;gap:2px;padding:0 16px;border-bottom:1px solid #353860;position:sticky;top:52px;z-index:99}
 nav button{background:none;border:none;color:#8b92b8;padding:10px 18px;cursor:pointer;font-size:13px;font-family:inherit;border-bottom:2px solid transparent}
 nav button.active{color:#e8eaf0;border-bottom-color:#4f8ef7}
 nav button:hover{color:#e8eaf0}
@@ -161,10 +161,11 @@ section.active{display:block}
 
 /* TABLES */
 table{border-collapse:collapse;table-layout:fixed}
-th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:8px 10px;text-align:left;position:sticky;top:52px;overflow:hidden;white-space:nowrap;user-select:none}
-th .th-inner{display:flex;align-items:center;justify-content:space-between;gap:4px;height:100%}
-th .th-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-th .col-resizer{flex-shrink:0;width:6px;cursor:col-resize;align-self:stretch;border-radius:2px;background:transparent;transition:background .15s;margin-right:-4px}
+th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:0;text-align:left;position:sticky;top:94px;z-index:98;overflow:hidden;white-space:nowrap;user-select:none}
+th .th-inner{display:flex;align-items:stretch;height:100%;min-height:32px}
+th .th-txt{flex:1;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+th .col-resizer{flex-shrink:0;width:5px;cursor:col-resize;background:#353860;transition:background .15s;position:relative}
+th .col-resizer::after{content:'';position:absolute;inset:-4px 0;cursor:col-resize}
 th .col-resizer:hover,th.resizing .col-resizer{background:#4f8ef7}
 td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:top}
 tr:hover td{background:#1e2238}
