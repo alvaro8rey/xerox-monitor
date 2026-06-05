@@ -160,9 +160,13 @@ section.active{display:block}
 .kpi-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 
 /* TABLES */
-table{width:100%;border-collapse:collapse}
-th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:8px 10px;text-align:left;position:sticky;top:52px}
-td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:middle}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th{background:#2c3057;color:#8b92b8;font-size:11px;font-weight:600;text-transform:uppercase;padding:8px 10px;text-align:left;position:sticky;top:52px;overflow:hidden;white-space:nowrap;user-select:none}
+th .th-inner{display:flex;align-items:center;justify-content:space-between;gap:4px}
+th .th-txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+th .col-resizer{flex-shrink:0;width:5px;cursor:col-resize;height:20px;border-radius:2px;background:transparent;transition:background .15s}
+th .col-resizer:hover,th.resizing .col-resizer{background:#4f8ef7}
+td{padding:7px 10px;border-bottom:1px solid #1e2238;vertical-align:middle;overflow:hidden}
 tr:hover td{background:#1e2238}
 tr.crit td{color:#e74c3c}
 tr.warn td{color:#f39c12}
@@ -375,6 +379,36 @@ async function loadImpresoras() {
   }
 }
 
+// ── COLUMN RESIZE ────────────────────────────────────────────────────────────
+const _colWidths = {};
+let _resizeState = null;
+
+function startResize(ev, colId) {
+  ev.preventDefault();
+  const col = document.getElementById('cgcol-' + colId);
+  if (!col) return;
+  const startX = ev.clientX;
+  const startW = col.offsetWidth || parseInt(col.style.width) || 120;
+  const th = ev.target.closest('th');
+  if (th) th.classList.add('resizing');
+  _resizeState = {colId, col, startX, startW, th};
+  document.addEventListener('mousemove', _onResize);
+  document.addEventListener('mouseup',   _stopResize);
+}
+function _onResize(ev) {
+  if (!_resizeState) return;
+  const {colId, col, startX, startW} = _resizeState;
+  const newW = Math.max(60, startW + ev.clientX - startX);
+  col.style.width = newW + 'px';
+  _colWidths[colId] = newW;
+}
+function _stopResize() {
+  if (_resizeState && _resizeState.th) _resizeState.th.classList.remove('resizing');
+  _resizeState = null;
+  document.removeEventListener('mousemove', _onResize);
+  document.removeEventListener('mouseup',   _stopResize);
+}
+
 function colVis(id) {
   const el = document.getElementById(id);
   return el ? el.checked : true;
@@ -450,19 +484,30 @@ function renderImpresoras() {
     return `<tr class="${cls}">${cells}</tr>`;
   }).join('');
 
-  let headers = '';
-  if (showNombre)    headers += '<th>Nombre</th>';
-  if (showIp)        headers += '<th>IP</th>';
-  if (showUbicacion) headers += '<th>Ubicación</th>';
-  if (showCons)      headers += '<th>Consumibles</th>';
-  if (showAlertas)   headers += '<th>Alertas</th>';
-  if (showTs)        headers += '<th>Última lectura</th>';
+  const COL_DEFS = [
+    {id:'col-nombre',    label:'Nombre',        show:showNombre,    w: _colWidths['col-nombre']    || 200},
+    {id:'col-ip',        label:'IP',            show:showIp,        w: _colWidths['col-ip']        || 130},
+    {id:'col-ubicacion', label:'Ubicación',     show:showUbicacion, w: _colWidths['col-ubicacion'] || 140},
+    {id:'col-consumibles',label:'Consumibles',  show:showCons,      w: _colWidths['col-consumibles']|| 260},
+    {id:'col-alertas',   label:'Alertas',       show:showAlertas,   w: _colWidths['col-alertas']   || 260},
+    {id:'col-ts',        label:'Última lectura',show:showTs,        w: _colWidths['col-ts']        || 130},
+  ];
+  const visCols = COL_DEFS.filter(c => c.show);
+
+  const colgroup = visCols.map(c => `<col id="cgcol-${c.id}" style="width:${c.w}px">`).join('');
+  const headers  = visCols.map((c,i) => {
+    const isLast = i === visCols.length - 1;
+    const resizer = isLast ? '' : `<span class="col-resizer" data-col="${c.id}" onmousedown="startResize(event,'${c.id}')"></span>`;
+    return `<th data-col="${c.id}"><div class="th-inner"><span class="th-txt">${c.label}</span>${resizer}</div></th>`;
+  }).join('');
 
   document.getElementById('imp-table-wrap').innerHTML = `
-    <table>
+    <div style="overflow-x:auto">
+    <table id="imp-table">
+      <colgroup>${colgroup}</colgroup>
       <thead><tr>${headers}</tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table></div>`;
 }
 
 // ── CONTABILIDAD ──────────────────────────────────────────────────────────────
