@@ -179,13 +179,13 @@ tr.off td{color:#6c7a99}
 .dot-ok{background:#2ecc71} .dot-warn{background:#f39c12} .dot-crit{background:#e74c3c} .dot-off{background:#6c7a99}
 
 /* CONSUMIBLES */
-.cons-bars{display:flex;flex-direction:column;gap:3px;min-width:200px}
+.cons-bars{display:flex;flex-direction:column;gap:3px}
 .cons-item{display:flex;align-items:center;gap:6px;font-size:12px}
-.bar-bg{flex:1;background:#1a1d2e;border-radius:3px;height:6px;min-width:80px}
-.bar-fill{height:6px;border-radius:3px;transition:width .3s}
+.bar-bg{flex:1;background:#2a2d45;border-radius:3px;height:7px;min-width:60px;position:relative}
+.bar-fill{height:7px;border-radius:3px;transition:width .3s;min-width:2px}
 .bar-ok{background:#2ecc71} .bar-warn{background:#f39c12} .bar-crit{background:#e74c3c}
-.cons-lbl{width:150px;min-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#c8cae0}
-.cons-pct{width:34px;text-align:right;font-size:11px}
+.cons-lbl{flex:0 1 160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#c8cae0}
+.cons-pct{width:30px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums}
 
 /* ALERTAS */
 .alerts-cell{display:flex;flex-direction:column;gap:3px}
@@ -472,7 +472,7 @@ function renderImpresoras() {
         ${d.consumibles.map(c => `
           <div class="cons-item">
             <span class="cons-lbl" title="${esc(c.nombre)}">${esc(c.nombre)}</span>
-            <div class="bar-bg"><div class="bar-fill bar-${c.estado}" style="width:${Math.max(0,c.pct)}%"></div></div>
+            <div class="bar-bg"><div class="bar-fill bar-${c.estado}" style="width:${c.pct>0?Math.max(1,c.pct)+'%':'0'}"></div></div>
             <span class="cons-pct" style="color:${c.estado==='critico'?'#e74c3c':c.estado==='alerta'?'#f39c12':'#2ecc71'}">${c.pct>=0?c.pct+'%':'?'}</span>
           </div>`).join('')}
       </div>` : '<span style="color:#6c7a99">Sin datos</span>';
